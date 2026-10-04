@@ -35,8 +35,7 @@ async def create_appointment(
 ) -> Appointment:
     # Пациент может записать только себя
     if current_user.role == RoleEnum.PATIENT and (
-        not current_user.patient_profile
-        or current_user.patient_profile.id != data.patient_id
+        not current_user.patient_profile or current_user.patient_profile.id != data.patient_id
     ):
         raise PermissionDeniedError("Пациент может записать только себя")
     service = AppointmentService(db)
@@ -87,12 +86,11 @@ async def list_appointments(
         limit=page_size,
     )
 
-    return PaginatedResponse(
+    return PaginatedResponse.create(
         items=items,
         total=total,
         page=page,
         page_size=page_size,
-        total_pages=(total + page_size - 1) // page_size if total else 0,
     )
 
 

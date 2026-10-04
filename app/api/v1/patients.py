@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_roles
+from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE
 from app.core.exceptions import NotFoundError
 from app.db.session import get_db
 from app.models.entities import Patient, User
@@ -53,8 +54,8 @@ async def list_patients(
         ),
     ],
     q: str | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = DEFAULT_PAGE,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> PaginatedResponse[PatientResponse]:
     repo = PatientRepository(db)
     items, total = await repo.search(
@@ -62,12 +63,11 @@ async def list_patients(
         offset=(page - 1) * page_size,
         limit=page_size,
     )
-    return PaginatedResponse(
+    return PaginatedResponse.create(
         items=items,
         total=total,
         page=page,
         page_size=page_size,
-        total_pages=(total + page_size - 1) // page_size if total else 0,
     )
 
 

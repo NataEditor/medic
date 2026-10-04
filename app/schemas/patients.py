@@ -2,20 +2,30 @@ from datetime import date, datetime
 
 from pydantic import EmailStr, Field
 
+from app.core.constants import (
+    GENDER_REGEX_PATTERN,
+    LONG_STRING_LENGTH,
+    MEDIUM_STRING_LENGTH,
+    SHORT_STRING_LENGTH,
+)
 from app.schemas.common import ORMModel
 
 
 class PatientBase(ORMModel):
-    first_name: str = Field(..., max_length=100)
-    last_name: str = Field(..., max_length=100)
-    middle_name: str | None = Field(None, max_length=100)
+    first_name: str = Field(..., max_length=MEDIUM_STRING_LENGTH)
+    last_name: str = Field(..., max_length=MEDIUM_STRING_LENGTH)
+    middle_name: str | None = Field(None, max_length=MEDIUM_STRING_LENGTH)
     birth_date: date
-    gender: str = Field(..., pattern=r"^[MF]$", description="M (мужской) или F (женский)")
-    phone: str = Field(..., max_length=50)
+    gender: str = Field(
+        ...,
+        pattern=GENDER_REGEX_PATTERN,
+        description="M (мужской) или F (женский)",
+    )
+    phone: str = Field(..., max_length=SHORT_STRING_LENGTH)
     email: EmailStr | None = None
     snils: str | None = Field(None, max_length=20)
     oms_number: str | None = Field(None, max_length=30)
-    address: str | None = Field(None, max_length=500)
+    address: str | None = Field(None, max_length=LONG_STRING_LENGTH)
 
 
 class PatientCreate(PatientBase):

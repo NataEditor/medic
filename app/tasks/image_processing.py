@@ -3,6 +3,12 @@ from pathlib import Path
 from loguru import logger
 from PIL import Image, ImageOps
 
+from app.core.constants import (
+    MAX_IMAGE_DIMENSION,
+    OPTIMIZED_JPEG_QUALITY,
+    THUMBNAIL_JPEG_QUALITY,
+    THUMBNAIL_SIZE,
+)
 from app.tasks.celery_app import celery_app
 
 
@@ -26,15 +32,13 @@ def optimize_medical_image(file_path_str: str) -> dict[str, str]:
             # Генерируем миниатюру
             thumb_path = src_path.with_name(f"{src_path.stem}_thumb.jpg")
             thumb = img.copy()
-            thumb.thumbnail((400, 400), Image.Resampling.LANCZOS)
-            thumb.save(thumb_path, "JPEG", quality=80, optimize=True)
+            thumb.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+            thumb.save(thumb_path, "JPEG", quality=THUMBNAIL_JPEG_QUALITY, optimize=True)
 
-            # Оптимизируем оригинал, если слишком большой (>2560px)
-            max_dimension = 2560
-            if max(img.size) > max_dimension:
-                img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-                img.save(src_path, "JPEG", quality=85, optimize=True)
-
+            # Оптимизируем оригинал, если слишком большой
+            if max(img.size) > MAX_IMAGE_DIMENSION:
+                img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.LANCZOS)
+                img.save(src_path, "JPEG", quality=OPTIMIZED_JPEG_QUALITY, optimize=True)
             logger.info("Изображение {} успешно оптимизировано", src_path.name)
             return {
                 "status": "ok",

@@ -1,7 +1,9 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import DateTime, MetaData
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.core.utils import utcnow
 
 # Соглашение об именовании индексов и ограничений для Alembic
 POSTGRES_INDEXES_NAMING_CONVENTION = {
@@ -22,12 +24,12 @@ class TimestampMixin:
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
+        default=utcnow,
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
+        default=utcnow,
+        onupdate=utcnow,
         nullable=False,
     )

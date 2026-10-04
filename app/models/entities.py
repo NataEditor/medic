@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -16,6 +16,12 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import (
+    DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    DEFAULT_DOCTOR_APPOINTMENT_FEE_PERCENT,
+    DEFAULT_DOCTOR_PROCEDURE_FEE_PERCENT,
+)
+from app.core.utils import build_full_name, utcnow
 from app.db.base import Base, TimestampMixin
 from app.models.enums import (
     AppointmentStatus,
@@ -80,8 +86,7 @@ class User(Base, TimestampMixin):
 
     @property
     def full_name(self) -> str:
-        parts = [self.last_name, self.first_name, self.middle_name]
-        return " ".join(p for p in parts if p)
+        return build_full_name(self.last_name, self.first_name, self.middle_name)
 
 
 class DoctorProfile(Base, TimestampMixin):
@@ -96,10 +101,10 @@ class DoctorProfile(Base, TimestampMixin):
     specialization: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     cabinet_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     appointment_fee_percent: Mapped[Decimal] = mapped_column(
-        Numeric(5, 2), default=Decimal("30.00"), nullable=False
+        Numeric(5, 2), default=DEFAULT_DOCTOR_APPOINTMENT_FEE_PERCENT, nullable=False
     )
     procedure_fee_percent: Mapped[Decimal] = mapped_column(
-        Numeric(5, 2), default=Decimal("15.00"), nullable=False
+        Numeric(5, 2), default=DEFAULT_DOCTOR_PROCEDURE_FEE_PERCENT, nullable=False
     )
 
     user: Mapped[User] = relationship(back_populates="doctor_profile")
@@ -133,8 +138,7 @@ class Patient(Base, TimestampMixin):
 
     @property
     def full_name(self) -> str:
-        parts = [self.last_name, self.first_name, self.middle_name]
-        return " ".join(p for p in parts if p)
+        return build_full_name(self.last_name, self.first_name, self.middle_name)
 
 
 class MedicalRecord(Base, TimestampMixin):
@@ -146,9 +150,7 @@ class MedicalRecord(Base, TimestampMixin):
     patient_id: Mapped[int] = mapped_column(
         ForeignKey("patients.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    record_number: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False, index=True
-    )
+    record_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     blood_group: Mapped[str | None] = mapped_column(String(10), nullable=True)
     allergies: Mapped[str | None] = mapped_column(Text, nullable=True)
     chronic_diseases: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -176,11 +178,11 @@ class MedicalRecordEntry(Base, TimestampMixin):
     appointment_id: Mapped[int | None] = mapped_column(
         ForeignKey("appointments.id", ondelete="SET NULL"), nullable=True
     )
-    complaints: Mapped[str] = mapped_column(Text, nullable=False)           # Жалобы
-    anamnesis: Mapped[str | None] = mapped_column(Text, nullable=True)       # Анамнез
-    objective_status: Mapped[str | None] = mapped_column(Text, nullable=True)# Объективный статус
-    diagnosis_icd10: Mapped[str] = mapped_column(String(20), nullable=False) # Код МКБ-10
-    diagnosis_text: Mapped[str] = mapped_column(Text, nullable=False)        # Развёрнутый диагноз
+    complaints: Mapped[str] = mapped_column(Text, nullable=False)  # Жалобы
+    anamnesis: Mapped[str | None] = mapped_column(Text, nullable=True)  # Анамнез
+    objective_status: Mapped[str | None] = mapped_column(Text, nullable=True)  # Объективный статус
+    diagnosis_icd10: Mapped[str] = mapped_column(String(20), nullable=False)  # Код МКБ-10
+    diagnosis_text: Mapped[str] = mapped_column(Text, nullable=False)  # Развёрнутый диагноз
     treatment_plan: Mapped[str | None] = mapped_column(Text, nullable=True)  # План лечения
 
     record: Mapped[MedicalRecord] = relationship(back_populates="entries")
@@ -197,7 +199,9 @@ class Service(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    duration_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    duration_minutes: Mapped[int] = mapped_column(
+        Integer, default=DEFAULT_APPOINTMENT_DURATION_MINUTES, nullable=False
+    )
     is_procedure: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
@@ -223,7 +227,9 @@ class Appointment(Base, TimestampMixin):
     scheduled_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    duration_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    duration_minutes: Mapped[int] = mapped_column(
+        Integer, default=DEFAULT_APPOINTMENT_DURATION_MINUTES, nullable=False
+    )
     status: Mapped[AppointmentStatus] = mapped_column(
         Enum(AppointmentStatus, name="appointment_status_enum", native_enum=False),
         default=AppointmentStatus.SCHEDULED,
@@ -237,13 +243,9 @@ class Appointment(Base, TimestampMixin):
     patient: Mapped[Patient] = relationship(back_populates="appointments")
     doctor: Mapped[User] = relationship(foreign_keys=[doctor_id])
     service: Mapped[Service | None] = relationship()
-    invoice: Mapped["Invoice | None"] = relationship(
-        back_populates="appointment", uselist=False
-    )
+    invoice: Mapped["Invoice | None"] = relationship(back_populates="appointment", uselist=False)
 
-    __table_args__ = (
-        Index("ix_appointments_doctor_schedule", "doctor_id", "scheduled_at"),
-    )
+    __table_args__ = (Index("ix_appointments_doctor_schedule", "doctor_id", "scheduled_at"),)
 
 
 class Assignment(Base, TimestampMixin):
@@ -298,9 +300,7 @@ class ProcedureExecution(Base, TimestampMixin):
     nurse_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    executed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[ProcedureExecutionStatus] = mapped_column(
         Enum(ProcedureExecutionStatus, name="procedure_execution_status_enum", native_enum=False),
         default=ProcedureExecutionStatus.COMPLETED,
@@ -331,9 +331,7 @@ class AnalysisResult(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)  # Заключение
     file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)  # PDF / скан
-    performed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    performed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     assignment: Mapped[Assignment] = relationship(back_populates="analyses")
     patient: Mapped[Patient] = relationship()
@@ -407,7 +405,7 @@ class AuditLog(Base):
     ip_address: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
+        default=utcnow,
         nullable=False,
         index=True,
     )

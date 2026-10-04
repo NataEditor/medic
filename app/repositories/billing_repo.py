@@ -5,6 +5,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.constants import (
+    DEFAULT_DOCTOR_APPOINTMENT_FEE_PERCENT,
+    ONE_HUNDRED_PERCENT,
+)
 from app.models.entities import (
     Appointment,
     Invoice,
@@ -126,9 +130,12 @@ class BillingRepository(BaseRepository[Invoice]):
 
         for doc in doctors:
             profile = doc.doctor_profile
-            fee_percent = profile.appointment_fee_percent if profile else Decimal("30.00")
+            fee_percent = (
+                profile.appointment_fee_percent
+                if profile
+                else DEFAULT_DOCTOR_APPOINTMENT_FEE_PERCENT
+            )
             spec = profile.specialization if profile else "Общая практика"
-
             # Считаем приёмы врача
             appt_query = (
                 select(
@@ -148,8 +155,7 @@ class BillingRepository(BaseRepository[Invoice]):
             appts_rev = Decimal(str(appt_res[1]))
 
             # Зарплата по проценту от приёмов
-            salary = (appts_rev * fee_percent / Decimal(100)).quantize(Decimal("0.01"))
-
+            salary = (appts_rev * fee_percent / ONE_HUNDRED_PERCENT).quantize(Decimal("0.01"))
             items.append(
                 DoctorRevenueItem(
                     doctor_id=doc.id,

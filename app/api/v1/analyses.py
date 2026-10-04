@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_roles
 from app.core.config import settings
+from app.core.constants import ALLOWED_ANALYSIS_EXTENSIONS
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.models.entities import AnalysisResult, Assignment, User
@@ -43,11 +44,11 @@ async def upload_analysis(
 
     file_path: str | None = None
     if file and file.filename:
-        # Валидация расширения
+        # Валидация расширения файла
         suffix = Path(file.filename).suffix.lower()
-        if suffix not in (".pdf", ".png", ".jpg", ".jpeg", ".tiff"):
-            raise BusinessRuleError("Разрешены только файлы PDF, JPG, PNG, TIFF")
-
+        if suffix not in ALLOWED_ANALYSIS_EXTENSIONS:
+            allowed_str = ", ".join(ALLOWED_ANALYSIS_EXTENSIONS)
+            raise BusinessRuleError(f"Разрешены только файлы формата: {allowed_str}")
         # Сохранение файла на диск
         upload_dir = Path(settings.media_dir) / "analyses" / str(patient_id)
         upload_dir.mkdir(parents=True, exist_ok=True)

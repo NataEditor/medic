@@ -2,6 +2,11 @@ from datetime import datetime
 
 from pydantic import Field
 
+from app.core.constants import (
+    DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    MAX_APPOINTMENT_DURATION_MINUTES,
+    MIN_APPOINTMENT_DURATION_MINUTES,
+)
 from app.models.enums import AppointmentStatus
 from app.schemas.clinics import ClinicResponse
 from app.schemas.common import ORMModel
@@ -15,7 +20,11 @@ class AppointmentCreate(ORMModel):
     doctor_id: int
     service_id: int | None = None
     scheduled_at: datetime
-    duration_minutes: int = Field(default=30, ge=10, le=240)
+    duration_minutes: int = Field(
+        default=DEFAULT_APPOINTMENT_DURATION_MINUTES,
+        ge=MIN_APPOINTMENT_DURATION_MINUTES,
+        le=MAX_APPOINTMENT_DURATION_MINUTES,
+    )
     notes: str | None = None
 
 
@@ -24,7 +33,11 @@ class AppointmentUpdate(ORMModel):
     doctor_id: int | None = None
     service_id: int | None = None
     scheduled_at: datetime | None = None
-    duration_minutes: int | None = Field(None, ge=10, le=240)
+    duration_minutes: int | None = Field(
+        None,
+        ge=MIN_APPOINTMENT_DURATION_MINUTES,
+        le=MAX_APPOINTMENT_DURATION_MINUTES,
+    )
     notes: str | None = None
 
 

@@ -1,8 +1,7 @@
-from datetime import UTC, datetime
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.utils import format_medical_record_number
 from app.models.entities import MedicalRecord, Patient
 from app.repositories.patient_repo import PatientRepository
 from app.schemas.patients import PatientCreate, PatientUpdate
@@ -33,9 +32,8 @@ class PatientService:
         )
         created_patient = await self.patient_repo.create(patient)
 
-        # Автоматическая генерация номера ЭМК
-        year = datetime.now(UTC).year
-        record_number = f"MED-{year}-{created_patient.id:06d}"
+        # Автоматическая генерация номера ЭМК по единому формату
+        record_number = format_medical_record_number(created_patient.id)
 
         medical_record = MedicalRecord(
             patient_id=created_patient.id,

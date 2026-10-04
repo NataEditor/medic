@@ -67,6 +67,7 @@ class AppointmentRepository(BaseRepository[Appointment]):
             if existing_start < end_time and existing_end > start_time:
                 return True
         return False
+
     async def filter_appointments(
         self,
         clinic_id: int | None = None,
