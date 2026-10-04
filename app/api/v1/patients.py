@@ -1,17 +1,29 @@
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_roles
-from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE
-from app.core.exceptions import NotFoundError
+from app.api.deps import get_current_user, require_roles
+from app.core.constants import (
+    ALLOWED_PASSPORT_SCAN_EXTENSIONS,
+    DEFAULT_PAGE,
+    DEFAULT_PAGE_SIZE,
+    PASSPORT_SCAN_MEDIA_TYPE,
+)
+from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.models.entities import Patient, User
 from app.models.enums import RoleEnum
 from app.repositories.patient_repo import PatientRepository
 from app.schemas.common import PaginatedResponse
-from app.schemas.patients import PatientCreate, PatientResponse, PatientUpdate
+from app.schemas.patients import (
+    PatientCreate,
+    PatientPassportScanResponse,
+    PatientResponse,
+    PatientUpdate,
+)
 from app.services.patient_service import PatientService
 
 router = APIRouter(prefix="/patients", tags=["Пациенты"])
@@ -21,7 +33,7 @@ router = APIRouter(prefix="/patients", tags=["Пациенты"])
     "",
     response_model=PatientResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Регистрация пациента и открытие ЭМК (ресепшен)",
+    summary="Регистрация пациента по паспорту и открытие ЭМК (ресепшен)",
 )
 async def create_patient(
     data: PatientCreate,
@@ -31,6 +43,7 @@ async def create_patient(
         Depends(require_roles(RoleEnum.RECEPTIONIST, RoleEnum.DOCTOR)),
     ],
 ) -> Patient:
+    """Уникальность пациента определяется парой серия+номер паспорта."""
     service = PatientService(db)
     return await service.create_patient_with_record(data)
 
@@ -57,6 +70,7 @@ async def list_patients(
     page: int = DEFAULT_PAGE,
     page_size: int = DEFAULT_PAGE_SIZE,
 ) -> PaginatedResponse[PatientResponse]:
+    """Поиск работает по ФИО, телефону и паспорту (серии/номеру)."""
     repo = PatientRepository(db)
     items, total = await repo.search(
         query=q,
@@ -68,6 +82,67 @@ async def list_patients(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.post(
+    "/{patient_id}/passport-scan",
+    response_model=PatientPassportScanResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Загрузка скана паспорта (jpg) и привязка к карте пациента",
+)
+async def upload_passport_scan(
+    patient_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[
+        User,
+        Depends(require_roles(RoleEnum.RECEPTIONIST, RoleEnum.DOCTOR)),
+    ],
+    file: UploadFile = File(..., description="Скан паспорта в формате JPG"),
+) -> PatientPassportScanResponse:
+    if not file.filename:
+        raise BusinessRuleError("Файл не передан")
+
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_PASSPORT_SCAN_EXTENSIONS:
+        allowed = ", ".join(ALLOWED_PASSPORT_SCAN_EXTENSIONS)
+        raise BusinessRuleError(f"Скан паспорта принимается только в формате: {allowed}")
+
+    service = PatientService(db)
+    patient = await service.attach_passport_scan(patient_id, await file.read())
+
+    return PatientPassportScanResponse.build(
+        patient_id=patient.id,
+        uploaded_at=patient.passport_scan_uploaded_at,
+    )
+
+
+@router.get(
+    "/{patient_id}/passport-scan",
+    summary="Получить скан паспорта пациента (только персонал)",
+    response_class=FileResponse,
+)
+async def get_passport_scan(
+    patient_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[
+        User,
+        Depends(
+            require_roles(
+                RoleEnum.RECEPTIONIST,
+                RoleEnum.DOCTOR,
+                RoleEnum.NURSE,
+            )
+        ),
+    ],
+) -> FileResponse:
+    """Скан отдаётся только через API из закрытого хранилища — по ролям и с аудитом."""
+    service = PatientService(db)
+    scan_path = await service.get_passport_scan(patient_id)
+    return FileResponse(
+        path=scan_path,
+        media_type=PASSPORT_SCAN_MEDIA_TYPE,
+        filename=f"passport_{patient_id}.jpg",
     )
 
 
@@ -110,3 +185,23 @@ async def update_patient(
 ) -> Patient:
     service = PatientService(db)
     return await service.update_patient(patient_id, data)
+
+
+@router.get(
+    "/my/card",
+    response_model=PatientResponse,
+    summary="Моя карточка пациента (для пациента)",
+)
+async def get_my_patient_card(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Patient:
+    """Пациент видит только свою карточку; чужой скан паспорта ему недоступен."""
+    if current_user.role != RoleEnum.PATIENT or not current_user.patient_profile:
+        raise PermissionDeniedError("Эндпоинт доступен только пациентам")
+
+    repo = PatientRepository(db)
+    patient = await repo.get_by_user_id(current_user.id)
+    if not patient:
+        raise NotFoundError("Ваша карточка не найдена")
+    return patient

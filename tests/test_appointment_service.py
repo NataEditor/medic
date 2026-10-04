@@ -39,6 +39,8 @@ class TestAppointmentService(unittest.IsolatedAsyncioTestCase):
             patient = Patient(
                 first_name="Тест",
                 last_name="Пациентов",
+                passport_series="1234",
+                passport_number="567890",
                 birth_date=datetime(1990, 1, 1, tzinfo=UTC).date(),
                 gender="M",
                 phone="+79990000002",

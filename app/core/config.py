@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     rabbitmq_port: int = 5672
 
     media_dir: str = "media"
+    # Закрытое хранилище (паспорта и др. ПДн): Nginx его не отдаёт, доступ только через API
+    private_media_dir: str = "private_media"
     max_upload_size_mb: int = Field(default=10, ge=1, le=100)
 
     @computed_field  # type: ignore[prop-decorator]

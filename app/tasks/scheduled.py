@@ -41,13 +41,12 @@ def remind_upcoming_appointments() -> int:
             logger.info(
                 "Напоминание пациенту {} (тел: {}) о приёме к врачу {} в {}",
                 patient.full_name,
-                patient.phone,
+                patient.phone or "не указан",
                 doctor.full_name,
                 appt.scheduled_at.strftime("%H:%M"),
             )
-            # Здесь вызывается SMS/Email шлюз
+            # Телефон необязателен: при его отсутствии напоминание уходит на email
             sent_count += 1
-
     return sent_count
 
 

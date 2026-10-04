@@ -10,8 +10,16 @@ class PatientRepository(BaseRepository[Patient]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(Patient, session)
 
-    async def get_by_phone(self, phone: str) -> Patient | None:
-        stmt = select(Patient).where(Patient.phone == phone.strip())
+    async def get_by_passport(
+        self,
+        passport_series: str,
+        passport_number: str,
+    ) -> Patient | None:
+        """Поиск пациента по естественному ключу — серии и номеру паспорта."""
+        stmt = select(Patient).where(
+            Patient.passport_series == passport_series.strip(),
+            Patient.passport_number == passport_number.strip(),
+        )
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
 
@@ -35,15 +43,21 @@ class PatientRepository(BaseRepository[Patient]):
 
         if query:
             q = f"%{query.strip()}%"
+            digits_only = query.strip().replace(" ", "").replace("-", "")
             filter_clause = or_(
                 Patient.last_name.ilike(q),
                 Patient.first_name.ilike(q),
+                Patient.middle_name.ilike(q),
                 Patient.phone.ilike(q),
                 Patient.snils.ilike(q),
+                # Паспорт ищем и по частям: '1234' найдёт серию, '567890' — номер
+                Patient.passport_series.ilike(q),
+                Patient.passport_number.ilike(q),
+                Patient.passport_series.ilike(f"%{digits_only}%"),
+                Patient.passport_number.ilike(f"%{digits_only}%"),
             )
             stmt = stmt.where(filter_clause)
             count_stmt = count_stmt.where(filter_clause)
-
         stmt = stmt.order_by(Patient.last_name, Patient.first_name).offset(offset).limit(limit)
         items = (await self.session.execute(stmt)).scalars().all()
         total = int((await self.session.execute(count_stmt)).scalar_one())

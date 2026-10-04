@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -20,6 +21,12 @@ from app.core.constants import (
     DEFAULT_APPOINTMENT_DURATION_MINUTES,
     DEFAULT_DOCTOR_APPOINTMENT_FEE_PERCENT,
     DEFAULT_DOCTOR_PROCEDURE_FEE_PERCENT,
+    LONG_STRING_LENGTH,
+    MEDIUM_STRING_LENGTH,
+    PASSPORT_NUMBER_LENGTH,
+    PASSPORT_SERIES_LENGTH,
+    SHORT_STRING_LENGTH,
+    TITLE_STRING_LENGTH,
 )
 from app.core.utils import build_full_name, utcnow
 from app.db.base import Base, TimestampMixin
@@ -111,7 +118,11 @@ class DoctorProfile(Base, TimestampMixin):
 
 
 class Patient(Base, TimestampMixin):
-    """Карточка пациента."""
+    """Карточка пациента.
+
+    Естественный ключ — паспорт (серия + номер): именно он определяет
+    уникальность пациента, а не номер телефона.
+    """
 
     __tablename__ = "patients"
 
@@ -119,16 +130,35 @@ class Patient(Base, TimestampMixin):
     user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), unique=True, nullable=True
     )
-    first_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    last_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    middle_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    first_name: Mapped[str] = mapped_column(String(MEDIUM_STRING_LENGTH), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(MEDIUM_STRING_LENGTH), nullable=False)
+    middle_name: Mapped[str | None] = mapped_column(String(MEDIUM_STRING_LENGTH), nullable=True)
+
+    # --- Паспортные данные: серия + номер образуют уникальный ключ ---
+    passport_series: Mapped[str] = mapped_column(
+        String(PASSPORT_SERIES_LENGTH), nullable=False, index=True
+    )
+    passport_number: Mapped[str] = mapped_column(
+        String(PASSPORT_NUMBER_LENGTH), nullable=False, index=True
+    )
+    # Скан паспорта (jpg) лежит в закрытом хранилище private_media, Nginx его не отдаёт
+    passport_scan_path: Mapped[str | None] = mapped_column(
+        String(LONG_STRING_LENGTH), nullable=True
+    )
+    passport_scan_uploaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     birth_date: Mapped[date] = mapped_column(Date, nullable=False)
     gender: Mapped[str] = mapped_column(String(10), nullable=False)  # "M" / "F"
-    phone: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Телефон нужен для SMS-напоминаний, но уникальность пациента не определяет
+    phone: Mapped[str | None] = mapped_column(
+        String(SHORT_STRING_LENGTH), nullable=True, index=True
+    )
+    email: Mapped[str | None] = mapped_column(String(TITLE_STRING_LENGTH), nullable=True)
     snils: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True, index=True)
     oms_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(LONG_STRING_LENGTH), nullable=True)
 
     user: Mapped[User | None] = relationship(back_populates="patient_profile")
     medical_record: Mapped["MedicalRecord | None"] = relationship(
@@ -136,9 +166,22 @@ class Patient(Base, TimestampMixin):
     )
     appointments: Mapped[list["Appointment"]] = relationship(back_populates="patient")
 
+    __table_args__ = (
+        UniqueConstraint(
+            "passport_series",
+            "passport_number",
+            name="uq_patients_passport",
+        ),
+    )
+
     @property
     def full_name(self) -> str:
         return build_full_name(self.last_name, self.first_name, self.middle_name)
+
+    @property
+    def passport(self) -> str:
+        """Паспорт в человекочитаемом виде: '1234 567890'."""
+        return f"{self.passport_series} {self.passport_number}"
 
 
 class MedicalRecord(Base, TimestampMixin):

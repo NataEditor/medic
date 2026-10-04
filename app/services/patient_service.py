@@ -1,7 +1,11 @@
+from pathlib import Path
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
-from app.core.utils import format_medical_record_number
+from app.core.config import settings
+from app.core.constants import PASSPORT_SCAN_DIR_NAME, PASSPORT_SCAN_FILENAME
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.utils import format_medical_record_number, utcnow
 from app.models.entities import MedicalRecord, Patient
 from app.repositories.patient_repo import PatientRepository
 from app.schemas.patients import PatientCreate, PatientUpdate
@@ -13,18 +17,30 @@ class PatientService:
         self.patient_repo = PatientRepository(session)
 
     async def create_patient_with_record(self, data: PatientCreate) -> Patient:
-        """Ресепшен создаёт пациента — одновременно автоматически создаётся ЭМК."""
-        existing = await self.patient_repo.get_by_phone(data.phone)
+        """Ресепшен регистрирует пациента по паспорту — сразу открывается ЭМК.
+
+        Уникальность определяется парой серия+номер паспорта, а не телефоном:
+        один и тот же номер телефона может принадлежать разным людям
+        (например, родственникам).
+        """
+        existing = await self.patient_repo.get_by_passport(
+            data.passport_series, data.passport_number
+        )
         if existing:
-            raise ConflictError("Пациент с таким номером телефона уже зарегистрирован")
+            raise ConflictError(
+                f"Пациент с паспортом {data.passport_series} {data.passport_number} "
+                f"уже зарегистрирован (карта {existing.id})"
+            )
 
         patient = Patient(
             first_name=data.first_name.strip(),
             last_name=data.last_name.strip(),
             middle_name=data.middle_name.strip() if data.middle_name else None,
+            passport_series=data.passport_series,
+            passport_number=data.passport_number,
             birth_date=data.birth_date,
             gender=data.gender,
-            phone=data.phone.strip(),
+            phone=data.phone.strip() if data.phone else None,
             email=data.email.lower().strip() if data.email else None,
             snils=data.snils.strip() if data.snils else None,
             oms_number=data.oms_number.strip() if data.oms_number else None,
@@ -50,7 +66,18 @@ class PatientService:
             raise NotFoundError("Пациент не найден")
 
         update_dict = data.model_dump(exclude_unset=True)
+
+        # Смена паспорта — новая личность: проверяем, что такой уже нет
+        new_series = update_dict.get("passport_series", patient.passport_series)
+        new_number = update_dict.get("passport_number", patient.passport_number)
+        if (new_series, new_number) != (patient.passport_series, patient.passport_number):
+            duplicate = await self.patient_repo.get_by_passport(new_series, new_number)
+            if duplicate and duplicate.id != patient.id:
+                raise ConflictError(f"Пациент с паспортом {new_series} {new_number} уже существует")
+
         for key, val in update_dict.items():
+            if isinstance(val, str):
+                val = val.strip()
             setattr(patient, key, val)
 
         await self.session.flush()
@@ -62,3 +89,49 @@ class PatientService:
         if not record:
             raise NotFoundError("Медицинская карта не найдена")
         return record
+
+    def build_passport_scan_path(self, patient_id: int) -> Path:
+        """Путь к скану паспорта в закрытом хранилище (вне public media)."""
+        return (
+            Path(settings.private_media_dir)
+            / PASSPORT_SCAN_DIR_NAME
+            / str(patient_id)
+            / PASSPORT_SCAN_FILENAME
+        )
+
+    async def attach_passport_scan(self, patient_id: int, content: bytes) -> Patient:
+        """Сохраняет скан паспорта и привязывает его к карте пациента.
+
+        Файл кладём в private_media — Nginx это хранилище не раздаёт,
+        доступ возможен только через API с проверкой роли.
+        """
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if not patient:
+            raise NotFoundError("Пациент не найден")
+
+        max_bytes = settings.max_upload_size_mb * 1024 * 1024
+        if len(content) > max_bytes:
+            raise ValidationError(f"Файл превышает {settings.max_upload_size_mb} МБ")
+
+        target_path = self.build_passport_scan_path(patient_id)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(content)
+
+        patient.passport_scan_path = str(target_path)
+        patient.passport_scan_uploaded_at = utcnow()
+
+        await self.session.flush()
+        await self.session.refresh(patient)
+        return patient
+
+    async def get_passport_scan(self, patient_id: int) -> Path:
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if not patient:
+            raise NotFoundError("Пациент не найден")
+        if not patient.passport_scan_path:
+            raise NotFoundError("Скан паспорта не загружен")
+
+        scan_path = Path(patient.passport_scan_path)
+        if not scan_path.exists():
+            raise NotFoundError("Файл скана паспорта отсутствует в хранилище")
+        return scan_path

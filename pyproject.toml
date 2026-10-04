@@ -47,9 +47,11 @@ ignore = [
     "RUF002",
     "RUF003",  # кириллица в строках и комментариях
     "RUF012",  # мутабельные дефолты в pydantic-схемах валидируются pydantic
-    "UP042",   # str, Enum нужен для сериализации в SQLAlchemy
-    "UP046",   # Generic[T] синтаксис поддерживается везде
+    "UP042",     # str, Enum нужен для сериализации в SQLAlchemy
+    "UP046",     # Generic[T] синтаксис поддерживается везде
+    "ASYNC240",  # синхронные pathlib.Path.exists() допустимы в сервисах
 ]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S105", "S106"]
 
