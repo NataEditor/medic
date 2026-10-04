@@ -1,0 +1,164 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: medic-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-medic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medic}
+      POSTGRES_DB: ${POSTGRES_DB:-medic}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-medic} -d ${POSTGRES_DB:-medic}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: medic-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: medic-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-medic}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-medic}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medic-api
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_HOST: rabbitmq
+    volumes:
+      - ./app:/app/app
+      - ./alembic:/app/alembic
+      - media_data:/app/media
+      - logs_data:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medic-worker
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_HOST: rabbitmq
+    volumes:
+      - ./app:/app/app
+      - media_data:/app/media
+      - logs_data:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.tasks.celery_app:celery_app worker -l info -Q default,reports,images --concurrency=2
+    restart: unless-stopped
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medic-beat
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_HOST: rabbitmq
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.tasks.celery_app:celery_app beat -l info
+    restart: unless-stopped
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medic-flower
+    env_file: .env
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      REDIS_URL: redis://redis:6379/1
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: >
+      celery -A app.tasks.celery_app:celery_app flower
+      --broker_api=http://${RABBITMQ_USER:-medic}:${RABBITMQ_PASSWORD:-medic}@rabbitmq:15672/api/
+      --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+      --persistent=True
+      --db=/app/logs/flower.db
+    volumes:
+      - logs_data:/app/logs
+    ports:
+      - "5555:5555"
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: medic-nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - media_data:/var/www/media:ro
+      - logs_data:/var/log/nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  media_data:
+  logs_data:
