@@ -128,7 +128,8 @@ class BillingService:
         await self.session.refresh(refund)
         return refund
 
-    async def generate_financial_report(        self,
+    async def generate_financial_report(
+        self,
         accountant: User,
         start_date: date,
         end_date: date,

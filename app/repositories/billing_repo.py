@@ -67,7 +67,8 @@ class BillingRepository(BaseRepository[Invoice]):
         await self.session.refresh(payment)
         return payment
 
-    async def get_financial_summary(        self,
+    async def get_financial_summary(
+        self,
         start_date: date,
         end_date: date,
         clinic_id: int | None = None,

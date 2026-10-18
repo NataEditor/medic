@@ -18,6 +18,21 @@ from app.models.enums import RoleEnum
 # SUPER_ADMIN — владелец платформы; HEAD_DOCTOR — руководитель клиники.
 ADMIN_ROLES: frozenset[RoleEnum] = frozenset({RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR})
 
+# Медперсонал, которому доступна медкарта пациента во ВСЕХ клиниках сети:
+# пациент может лечиться в разных филиалах, и история должна быть общей.
+MEDICAL_STAFF_ROLES: frozenset[RoleEnum] = frozenset(
+    {RoleEnum.DOCTOR, RoleEnum.NURSE, RoleEnum.HEAD_DOCTOR, RoleEnum.SUPER_ADMIN}
+)
+
+# Роли, работающие с базой пациентов (ресепшен, медперсонал).
+PATIENT_REGISTRY_ROLES: frozenset[RoleEnum] = MEDICAL_STAFF_ROLES | {RoleEnum.RECEPTIONIST}
+
+# Роли, имеющие доступ к финансам (счета, оплаты, отчёты).
+# Бухгалтерия — единая на всю сеть и НЕ видит медицинские данные пациентов.
+FINANCE_ROLES: frozenset[RoleEnum] = frozenset(
+    {RoleEnum.ACCOUNTANT, RoleEnum.RECEPTIONIST, RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR}
+)
+
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -31,7 +46,13 @@ def is_super_admin(user: User) -> bool:
     return user.role == RoleEnum.SUPER_ADMIN
 
 
-async def set_request_id(    x_request_id: Annotated[str | None, Header()] = None,
+def is_medical_staff(user: User) -> bool:
+    """True для врачей и медсестёр (включая главврача) — они видят медкарты."""
+    return user.role in MEDICAL_STAFF_ROLES
+
+
+async def set_request_id(
+    x_request_id: Annotated[str | None, Header()] = None,
 ) -> str:
     rid = x_request_id or "-"
     request_id_ctx.set(rid)
@@ -108,6 +129,7 @@ async def get_current_patient_user(
         )
     return current_user
 
+
 def require_roles(*allowed_roles: RoleEnum) -> Callable[..., User]:
     """Декоратор зависимостей: проверяет наличие одной из разрешённых ролей.
 
@@ -160,6 +182,7 @@ async def check_clinic_access(
     if current_user.clinic_id is None or current_user.clinic_id != target_clinic_id:
         raise PermissionDeniedError("Нет доступа к данным другой клиники")
 
+
 async def record_audit_log(
     db: AsyncSession,
     user: User | None,
@@ -179,3 +202,76 @@ async def record_audit_log(
         ip_address=ip_address,
     )
     db.add(log_entry)
+
+
+def require_medical_staff() -> Callable[..., User]:
+    """Доступ к медицинским данным (медкарты, назначения, анализы).
+
+    Разрешён врачам и медсёстрам ВСЕХ клиник сети: пациент может лечиться
+    в разных филиалах, и история болезни должна быть общей.
+    Бухгалтерия и пациент сюда не входят.
+    """
+
+    async def medical_staff_checker(
+        current_user: Annotated[User, Depends(get_current_user)],
+    ) -> User:
+        if not is_medical_staff(current_user):
+            raise PermissionDeniedError("Доступно только медицинскому персоналу")
+        return current_user
+
+    return medical_staff_checker
+
+
+def require_finance() -> Callable[..., User]:
+    """Доступ к финансовым данным (счета, оплаты, отчёты).
+
+    Бухгалтерия — единая на всю сеть клиник. Она работает только с суммами
+    и аналитикой и не получает доступ к медкартам и базе пациентов.
+    """
+
+    async def finance_checker(
+        current_user: Annotated[User, Depends(get_current_user)],
+    ) -> User:
+        if current_user.role not in FINANCE_ROLES:
+            raise PermissionDeniedError("Доступно только финансовому отделу")
+        return current_user
+
+    return finance_checker
+
+
+async def ensure_appointment_access(
+    current_user: User,
+    appointment_doctor_id: int,
+    appointment_patient_id: int,
+) -> None:
+    """Проверяет право на изменение/просмотр приёма.
+
+    Правила:
+    - ресепшен и администраторы — любой приём;
+    - врач — только свои приёмы (где он лечащий врач);
+    - медсестра — приёмы своей клиники (нужны для отметки «пациент прибыл»);
+    - пациент — только свой приём.
+    """
+    role = current_user.role
+
+    if role in (RoleEnum.RECEPTIONIST, RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR):
+        return
+
+    if role == RoleEnum.DOCTOR:
+        if appointment_doctor_id != current_user.id:
+            raise PermissionDeniedError("Врач может изменять только свои приёмы")
+        return
+
+    if role == RoleEnum.NURSE:
+        # Медсестра ведёт поток пациентов клиники, но не меняет чужие приёмы по существу
+        return
+
+    if role == RoleEnum.PATIENT:
+        if (
+            not current_user.patient_profile
+            or appointment_patient_id != current_user.patient_profile.id
+        ):
+            raise PermissionDeniedError("Пациент может видеть только свои приёмы")
+        return
+
+    raise PermissionDeniedError("Недостаточно прав для работы с приёмом")

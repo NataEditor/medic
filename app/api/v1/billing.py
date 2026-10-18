@@ -4,8 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_roles
-from app.core.exceptions import NotFoundError
+from app.api.deps import get_current_user, require_roles
+from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.models.entities import Invoice, Service, User
 from app.models.enums import RoleEnum
@@ -30,6 +30,7 @@ router = APIRouter(prefix="/billing", tags=["Биллинг, касса и бу�
 @router.get("/services", response_model=list[ServiceResponse], summary="Каталог услуг клиники")
 async def list_services(
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
     only_active: bool = True,
 ) -> list[Service]:
     repo = BaseRepository(Service, db)
@@ -79,12 +80,33 @@ async def update_service(
 async def get_invoice(
     invoice_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> Invoice:
+    """Просмотр счёта с разграничением доступа.
+
+    Финансовые роли (бухгалтерия, ресепшен, администраторы) видят любой счёт.
+    Пациент — только свой. Врачи/медсёстры доступа к чужим счетам не имеют.
+    """
     repo = BillingRepository(db)
     inv = await repo.get_invoice_detailed(invoice_id)
     if not inv:
         raise NotFoundError("Счёт не найден")
-    return inv
+
+    role = current_user.role
+    finance_roles = (
+        RoleEnum.ACCOUNTANT,
+        RoleEnum.RECEPTIONIST,
+        RoleEnum.SUPER_ADMIN,
+        RoleEnum.HEAD_DOCTOR,
+    )
+    if role in finance_roles:
+        return inv
+    if role == RoleEnum.PATIENT:
+        if current_user.patient_profile and inv.patient_id == current_user.patient_profile.id:
+            return inv
+        raise PermissionDeniedError("Доступ к чужому счёту запрещён")
+
+    raise PermissionDeniedError("Недостаточно прав для просмотра счёта")
 
 
 @router.post(
@@ -131,7 +153,8 @@ async def refund_payment(
 
 
 # ----- Финансовые отчёты (бухгалтерия и главврач) -----
-@router.get(    "/reports/financial",
+@router.get(
+    "/reports/financial",
     response_model=ClinicFinancialReport,
     summary="Финансовый отчёт по клинике и расчёт врачей (бухгалтерия)",
 )

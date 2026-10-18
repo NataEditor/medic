@@ -60,6 +60,7 @@ async def change_password(
     await db.refresh(current_user)
     return service._issue_tokens(current_user)
 
+
 @router.post("/refresh", response_model=TokenResponse, summary="Обновление access токена")
 async def refresh_token(
     data: RefreshTokenRequest,

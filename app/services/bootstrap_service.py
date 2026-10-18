@@ -76,9 +76,7 @@ class BootstrapService:
         if await self.has_any_admin():
             return None
 
-        logger.warning(
-            "В системе нет администраторов — создаём супер-админа из настроек bootstrap"
-        )
+        logger.warning("В системе нет администраторов — создаём супер-админа из настроек bootstrap")
         return await self.create_super_admin(
             email=settings.bootstrap_admin_email,
             password=settings.bootstrap_admin_password,

@@ -4,7 +4,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import (
+    ensure_appointment_access,
+    get_current_user,
+    require_roles,
+)
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.models.entities import Appointment, User
@@ -20,6 +24,11 @@ from app.schemas.common import PaginatedResponse
 from app.services.appointment_service import AppointmentService
 
 router = APIRouter(prefix="/appointments", tags=["Приёмы и расписание"])
+
+# Статусы, которые может выставлять медсестра (отметка прибытия и начала приёма).
+NURSE_ALLOWED_STATUSES: frozenset[AppointmentStatus] = frozenset(
+    {AppointmentStatus.WAITING, AppointmentStatus.IN_PROGRESS}
+)
 
 
 @router.post(
@@ -109,31 +118,35 @@ async def get_appointment(
     if not appt:
         raise NotFoundError("Приём не найден")
 
-    # Пациент не может подглядывать чужие приёмы
-    if (
-        current_user.role == RoleEnum.PATIENT
-        and current_user.patient_profile
-        and appt.patient_id != current_user.patient_profile.id
-    ):
-        raise PermissionDeniedError("Доступ запрещён")
-
+    # Единое правило доступа: врач — свои, пациент — свой, ресепшен/админ — любой,
+    # медсестра — приёмы клиники (ведёт поток пациентов).
+    await ensure_appointment_access(current_user, appt.doctor_id, appt.patient_id)
     return appt
 
 
 @router.patch(
     "/{appointment_id}",
     response_model=AppointmentResponse,
-    summary="Перенос/редактирование приёма (ресепшен, врач)",
+    summary="Перенос приёма (ресепшен — любой, врач — только свой)",
 )
 async def update_appointment(
     appointment_id: int,
     data: AppointmentUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[
+    current_user: Annotated[
         User,
         Depends(require_roles(RoleEnum.RECEPTIONIST, RoleEnum.DOCTOR)),
     ],
 ) -> Appointment:
+    repo = AppointmentRepository(db)
+    appt = await repo.get_by_id(appointment_id)
+    if not appt:
+        raise NotFoundError("Приём не найден")
+
+    # Врач переносит только свои приёмы; ресепшен — любые.
+    if current_user.role == RoleEnum.DOCTOR and appt.doctor_id != current_user.id:
+        raise PermissionDeniedError("Врач может переносить только свои приёмы")
+
     service = AppointmentService(db)
     return await service.update_appointment(appointment_id, data)
 
@@ -141,16 +154,37 @@ async def update_appointment(
 @router.patch(
     "/{appointment_id}/status",
     response_model=AppointmentResponse,
-    summary="Изменить статус приёма (завершить, отменить, ожидание)",
+    summary="Изменить статус приёма (ресепшен/врач — по правам, медсестра — прибытие)",
 )
 async def update_status(
     appointment_id: int,
     data: AppointmentStatusUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[
+    current_user: Annotated[
         User,
-        Depends(require_roles(RoleEnum.RECEPTIONIST, RoleEnum.DOCTOR)),
+        Depends(
+            require_roles(
+                RoleEnum.RECEPTIONIST,
+                RoleEnum.DOCTOR,
+                RoleEnum.NURSE,
+            )
+        ),
     ],
 ) -> Appointment:
+    repo = AppointmentRepository(db)
+    appt = await repo.get_by_id(appointment_id)
+    if not appt:
+        raise NotFoundError("Приём не найден")
+
+    # Медсестра отмечает только факт прибытия/начала приёма, не закрывая его.
+    if current_user.role == RoleEnum.NURSE:
+        if data.status not in NURSE_ALLOWED_STATUSES:
+            raise PermissionDeniedError(
+                "Медсестра может отметить только «ожидает» или «идёт приём»"
+            )
+    else:
+        # Врач меняет статус только своих приёмов; ресепшен — любых.
+        await ensure_appointment_access(current_user, appt.doctor_id, appt.patient_id)
+
     service = AppointmentService(db)
     return await service.update_status(appointment_id, data)

@@ -23,6 +23,7 @@ ACTIVE_APPOINTMENT_STATUSES: tuple[AppointmentStatus, ...] = (
     AppointmentStatus.COMPLETED,
 )
 
+
 class ScheduleService:
     """Управление расписанием врачей и расчёт свободных слотов.
 
@@ -148,8 +149,7 @@ class ScheduleService:
         busy_ranges = [
             (
                 appt.scheduled_at.replace(tzinfo=None),
-                appt.scheduled_at.replace(tzinfo=None)
-                + timedelta(minutes=appt.duration_minutes),
+                appt.scheduled_at.replace(tzinfo=None) + timedelta(minutes=appt.duration_minutes),
             )
             for appt in appointments
             if appt.status in ACTIVE_APPOINTMENT_STATUSES
@@ -176,8 +176,7 @@ class ScheduleService:
                 and intervals_overlap(slot_start, slot_end, break_range[0], break_range[1])
             )
             is_busy = any(
-                intervals_overlap(slot_start, slot_end, busy[0], busy[1])
-                for busy in busy_ranges
+                intervals_overlap(slot_start, slot_end, busy[0], busy[1]) for busy in busy_ranges
             )
 
             if not in_break and not is_busy:

@@ -9,6 +9,7 @@
 - seed-demo         — наполнить базу демонстрационными данными.
 - list-users        — список пользователей (для диагностики).
 """
+
 import argparse
 import asyncio
 import getpass

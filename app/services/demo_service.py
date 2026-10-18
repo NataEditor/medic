@@ -107,10 +107,14 @@ class DemoSeedService:
     async def _ensure_schedule(self, doctor: User, clinic: Clinic) -> None:
         """График приёма врача: будни 09:00–18:00 с обедом 13:00–14:00."""
         existing = (
-            await self.session.execute(
-                select(DoctorSchedule).where(DoctorSchedule.doctor_id == doctor.id).limit(1)
+            (
+                await self.session.execute(
+                    select(DoctorSchedule).where(DoctorSchedule.doctor_id == doctor.id).limit(1)
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if existing:
             return
 
@@ -151,7 +155,8 @@ class DemoSeedService:
                 birth_date=date(1990, 5, 17),
                 gender="F",
                 phone="+74950000002",
-                email="patient@example.com",            )
+                email="patient@example.com",
+            )
         )
 
     async def _ensure_services(self) -> None:
@@ -164,8 +169,10 @@ class DemoSeedService:
         )
         for code, name, price, duration, is_procedure in catalog:
             exists = (
-                await self.session.execute(select(Service).where(Service.code == code).limit(1))
-            ).scalars().first()
+                (await self.session.execute(select(Service).where(Service.code == code).limit(1)))
+                .scalars()
+                .first()
+            )
             if exists:
                 continue
             self.session.add(

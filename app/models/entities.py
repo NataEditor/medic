@@ -226,9 +226,7 @@ class DoctorSchedule(Base, TimestampMixin):
     doctor: Mapped[User] = relationship()
     clinic: Mapped[Clinic] = relationship()
 
-    __table_args__ = (
-        UniqueConstraint("doctor_id", "weekday", name="uq_doctor_schedule_weekday"),
-    )
+    __table_args__ = (UniqueConstraint("doctor_id", "weekday", name="uq_doctor_schedule_weekday"),)
 
 
 class TimeOff(Base, TimestampMixin):
@@ -610,9 +608,7 @@ class Assignment(Base, TimestampMixin):
     record: Mapped[MedicalRecord] = relationship(back_populates="assignments")
     doctor: Mapped[User] = relationship()
     service: Mapped[Service | None] = relationship()
-    invoice: Mapped["Invoice | None"] = relationship(
-        back_populates="assignment", uselist=False
-    )
+    invoice: Mapped["Invoice | None"] = relationship(back_populates="assignment", uselist=False)
     executions: Mapped[list["ProcedureExecution"]] = relationship(
         back_populates="assignment", cascade="all, delete-orphan"
     )

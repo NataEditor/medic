@@ -40,7 +40,7 @@ async def create_assignment(
 @router.get(
     "/by-record/{record_id}",
     response_model=list[AssignmentResponse],
-    summary="Все назначения по медкарте (врачи, медсёстры, ресепшен)",
+    summary="Все назначения по медкарте (медперсонал сети, ресепшен)",
 )
 async def list_assignments(
     record_id: int,
@@ -52,7 +52,6 @@ async def list_assignments(
                 RoleEnum.DOCTOR,
                 RoleEnum.NURSE,
                 RoleEnum.RECEPTIONIST,
-                RoleEnum.ACCOUNTANT,
             )
         ),
     ],

@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import get_current_patient_user, require_roles
 from app.core.config import settings
 from app.core.constants import ALLOWED_ANALYSIS_EXTENSIONS
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
@@ -42,6 +42,15 @@ async def upload_analysis(
     if not assignment:
         raise NotFoundError("Назначение не найдено")
 
+    # Проверяем, что назначение и пациент согласованы (иначе анализ «прилипал» бы
+    # к чужой карте при произвольных переданных ID).
+    if assignment.record_id is None:
+        raise BusinessRuleError("У назначения отсутствует медкарта")
+    from app.models.entities import MedicalRecord
+
+    record = await db.get(MedicalRecord, assignment.record_id)
+    if not record or record.patient_id != patient_id:
+        raise BusinessRuleError("Пациент не соответствует указанному назначению")
     file_path: str | None = None
     if file and file.filename:
         # Валидация расширения файла
@@ -86,11 +95,10 @@ async def upload_analysis(
 )
 async def get_my_analyses(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_patient_user)],
 ) -> list[AnalysisResult]:
     if current_user.role != RoleEnum.PATIENT or not current_user.patient_profile:
         raise PermissionDeniedError("Доступно только пациентам")
-
     repo = BaseRepository(AnalysisResult, db)
     items, _ = await repo.list_paginated(
         offset=0,

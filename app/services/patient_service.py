@@ -24,6 +24,7 @@ class PatientService:
         self.session = session
         self.patient_repo = PatientRepository(session)
         self.user_repo = UserRepository(session)
+
     async def create_patient_with_record(self, data: PatientCreate) -> Patient:
         """Ресепшен регистрирует пациента по паспорту — сразу открывается ЭМК.
 

@@ -87,9 +87,7 @@ class AdminService:
             raise NotFoundError("Пользователь не найден")
 
         if target.role in (RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR):
-            raise BusinessRuleError(
-                "Удаление администратора запрещено. Сначала понизьте его роль."
-            )
+            raise BusinessRuleError("Удаление администратора запрещено. Сначала понизьте его роль.")
 
         await self.user_repo.delete(target)
 

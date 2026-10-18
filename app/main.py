@@ -50,6 +50,7 @@ async def _bootstrap_if_needed() -> None:
     except Exception as exc:
         logger.warning("Пропуск bootstrap при старте: {}", exc)
 
+
 app = FastAPI(
     title="MEDIC — Медицинская информационная система",
     description="""
