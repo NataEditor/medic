@@ -2,6 +2,17 @@ import enum
 
 
 class RoleEnum(str, enum.Enum):
+    """Роли пользователей в системе МИС.
+
+    Определяет уровень доступа (RBAC):
+    - PATIENT: видит только свою медкарту, анализы и свои приёмы.
+    - DOCTOR: ведёт приёмы, создаёт/редактирует назначения, вносит записи в ЭМК.
+    - HEAD_DOCTOR: администратор клиники, сквозной доступ ко всем филиалам, отчётам и прайсу.
+    - NURSE: просматривает назначения врача, вносит отметки о выполнении процедур.
+    - RECEPTIONIST: регистрирует пациентов по паспорту, формирует расписание, принимает оплату.
+    - ACCOUNTANT: финансовые отчёты, приёмы врачей, расчёт зарплат по процентам.
+    """
+
     PATIENT = "patient"
     DOCTOR = "doctor"
     HEAD_DOCTOR = "head_doctor"
@@ -11,43 +22,95 @@ class RoleEnum(str, enum.Enum):
 
 
 class AppointmentStatus(str, enum.Enum):
-    SCHEDULED = "scheduled"  # Запланирован
-    WAITING = "waiting"  # Пациент ожидает в клинике
-    IN_PROGRESS = "in_progress"  # Идёт приём
-    COMPLETED = "completed"  # Завершён
-    CANCELLED = "cancelled"  # Отменён
-    NO_SHOW = "no_show"  # Не явился
+    """Жизненный цикл приёма пациента.
+
+    Порядок перехода:
+    SCHEDULED (запланирован)
+      -> WAITING (пациент прибыл и ожидает у кабинета)
+      -> IN_PROGRESS (врач начал приём)
+      -> COMPLETED (приём завершён, внесена запись в ЭМК).
+
+    Исключительные статусы:
+    - CANCELLED: приём отменён пациентом или клиникой (с указанием причины).
+    - NO_SHOW: пациент не явился ко времени приёма.
+    """
+
+    SCHEDULED = "scheduled"
+    WAITING = "waiting"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    NO_SHOW = "no_show"
 
 
 class AssignmentType(str, enum.Enum):
-    MEDICATION = "medication"  # Лекарственный препарат
-    PROCEDURE = "procedure"  # Процедура / манипуляция (укол, капельница)
-    ANALYSIS = "analysis"  # Лабораторный анализ
-    DIAGNOSTIC = "diagnostic"  # Инструментальная диагностика (УЗИ, МРТ)
+    """Тип врачебного назначения.
+
+    - MEDICATION: приём лекарств (дозировка, кратность, длительность курса).
+    - PROCEDURE: манипуляции, требующие участия медсестры (уколы, капельницы, перевязки).
+    - ANALYSIS: направление на лабораторный анализ (кровь, моча, биохимия).
+    - DIAGNOSTIC: инструментальные исследования (УЗИ, ЭКГ, рентген).
+    """
+
+    MEDICATION = "medication"
+    PROCEDURE = "procedure"
+    ANALYSIS = "analysis"
+    DIAGNOSTIC = "diagnostic"
 
 
 class AssignmentStatus(str, enum.Enum):
-    PRESCRIBED = "prescribed"  # Назначено
-    IN_PROGRESS = "in_progress"  # Выполняется (например, курс капельниц)
-    COMPLETED = "completed"  # Выполнено
-    CANCELLED = "cancelled"  # Отменено врачом
+    """Статус врачебного назначения.
+
+    - PRESCRIBED: назначено врачом, ожидает начала курса.
+    - IN_PROGRESS: находится в процессе выполнения (медсестра начала процедуры).
+    - COMPLETED: курс завершён / анализ сдан и загружен.
+    - CANCELLED: отменено лечащим врачом.
+    """
+
+    PRESCRIBED = "prescribed"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 
 class ProcedureExecutionStatus(str, enum.Enum):
-    COMPLETED = "completed"  # Выполнено медсестрой
-    REFUSED = "refused"  # Пациент отказался
-    CONTRAINDICATED = "contraindicated"  # Противопоказание
+    """Результат выполнения процедуры медицинской сестрой.
+
+    - COMPLETED: манипуляция успешно проведена (списаны расходники).
+    - REFUSED: пациент отказался от процедуры на месте.
+    - CONTRAINDICATED: процедура не проведена из-за противопоказания (давление, аллергия).
+    """
+
+    COMPLETED = "completed"
+    REFUSED = "refused"
+    CONTRAINDICATED = "contraindicated"
 
 
 class PaymentStatus(str, enum.Enum):
-    PENDING = "pending"  # Ожидает оплаты
-    PAID = "paid"  # Оплачено
-    REFUNDED = "refunded"  # Возврат
-    CANCELLED = "cancelled"  # Отменён
+    """Статус счёта на оплату медицинских услуг.
+
+    - PENDING: счёт выставлен, оплата ожидается (ресепшен).
+    - PAID: счёт полностью оплачен (нал/карта/СБП).
+    - REFUNDED: оформлен возврат средств пациенту.
+    - CANCELLED: счёт аннулирован (например, при отмене приёма).
+    """
+
+    PENDING = "pending"
+    PAID = "paid"
+    REFUNDED = "refunded"
+    CANCELLED = "cancelled"
 
 
 class PaymentMethod(str, enum.Enum):
-    CASH = "cash"  # Наличные
-    CARD = "card"  # Терминал
-    SBP = "sbp"  # Система быстрых платежей
-    INSURANCE = "insurance"  # ОМС / ДМС
+    """Способ проведения оплаты в кассе клиники.
+
+    - CASH: наличные деньги.
+    - CARD: банковская карта через POS-терминал.
+    - SBP: система быстрых платежей (QR-код).
+    - INSURANCE: полис ОМС или добровольного медицинского страхования (ДМС).
+    """
+
+    CASH = "cash"
+    CARD = "card"
+    SBP = "sbp"
+    INSURANCE = "insurance"
