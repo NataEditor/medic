@@ -9,9 +9,11 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 
+# echo включаем отдельным флагом SQL_ECHO, а не вместе с DEBUG:
+# иначе SQL-логи засоряют консоль и логи приложения.
 engine: AsyncEngine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,
+    echo=settings.sql_echo,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
     log_level: str = "INFO"
+    # Отдельный флаг для логирования SQL-запросов (не завязан на DEBUG).
+    sql_echo: bool = False
 
     secret_key: str = "change-me-to-a-very-secret-32-byte-key-medic-mis"
     algorithm: str = "HS256"
