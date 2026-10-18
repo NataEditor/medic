@@ -3,12 +3,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import get_current_user, require_roles, require_super_admin
 from app.db.session import get_db
 from app.models.entities import User
 from app.models.enums import RoleEnum
 from app.schemas.auth import LoginRequest, RefreshTokenRequest, TokenResponse
-from app.schemas.users import UserCreate, UserResponse
+from app.schemas.common import StatusResponse
+from app.schemas.users import AdminCreate, UserCreate, UserResponse
+from app.services.admin_service import AdminService
 from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["Аутентификация"])
@@ -43,7 +45,7 @@ async def get_me(
     "/register",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Регистрация нового сотрудника (только главврач)",
+    summary="Регистрация сотрудника клиники (администратор)",
 )
 async def register_user(
     data: UserCreate,
@@ -52,3 +54,59 @@ async def register_user(
 ) -> User:
     service = AuthService(db)
     return await service.register_user(data)
+
+
+@router.post(
+    "/admins",
+    response_model=UserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать администратора платформы (только супер-админ)",
+)
+async def create_admin(
+    data: AdminCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_super_admin())],
+) -> User:
+    """Создать нового супер-админа. Роль фиксирована — клиент не может её подменить."""
+    service = AdminService(db)
+    return await service.create_admin(
+        actor=current_user,
+        email=data.email,
+        phone=data.phone,
+        password=data.password,
+        first_name=data.first_name,
+        last_name=data.last_name,
+        middle_name=data.middle_name,
+        clinic_id=data.clinic_id,
+    )
+
+
+@router.delete(
+    "/users/{user_id}",
+    response_model=StatusResponse,
+    summary="Удалить пользователя (запрещено удалять себя и других админов)",
+)
+async def delete_user(
+    user_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_super_admin())],
+) -> StatusResponse:
+    """Удаление пользователя с защитой: нельзя удалить себя или администратора."""
+    service = AdminService(db)
+    await service.delete_user(current_user, user_id)
+    return StatusResponse(message="Пользователь успешно удалён")
+
+
+@router.post(
+    "/users/{user_id}/deactivate",
+    response_model=UserResponse,
+    summary="Заблокировать сотрудника (нельзя заблокировать себя)",
+)
+async def deactivate_user(
+    user_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_super_admin())],
+) -> User:
+    """Блокировка учётной записи. Себя заблокировать нельзя — защита от «запертой двери»."""
+    service = AdminService(db)
+    return await service.deactivate_user(current_user, user_id)

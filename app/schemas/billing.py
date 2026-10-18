@@ -43,6 +43,17 @@ class PaymentCreate(ORMModel):
     method: PaymentMethod
 
 
+class PaymentRefundRequest(ORMModel):
+    """Запрос на контролируемый возврат средств по проведённому платежу.
+
+    Прямое изменение или удаление платежа запрещено всем ролям (защита кассы).
+    Возврат оформляется отдельной операцией с обязательным указанием причины,
+    которая фиксируется в журнале аудита.
+    """
+
+    reason: str = Field(..., min_length=5, max_length=500, description="Причина возврата")
+
+
 class PaymentResponse(ORMModel):
     id: int
     invoice_id: int

@@ -38,26 +38,36 @@ class BillingRepository(BaseRepository[Invoice]):
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
 
+    async def get_total_paid(self, invoice_id: int) -> Decimal:
+        """Сумма всех фактических оплат по счёту (учитывая компенсации возврата)."""
+        stmt = select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.invoice_id == invoice_id
+        )
+        return Decimal(str((await self.session.execute(stmt)).scalar_one()))
+
     async def add_payment(self, payment: Payment) -> Payment:
         self.session.add(payment)
         await self.session.flush()
 
-        # Проверяем общую сумму оплат по счёту
-        stmt = select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.invoice_id == payment.invoice_id
-        )
-        total_paid: Decimal = (await self.session.execute(stmt)).scalar_one()
-
         invoice = await self.session.get(Invoice, payment.invoice_id)
-        if invoice and total_paid >= invoice.amount:
-            invoice.status = PaymentStatus.PAID
-            await self.session.flush()
+        if invoice is None:
+            await self.session.refresh(payment)
+            return payment
 
+        # Возврат (отрицательный платёж) не может «оплатить» счёт заново.
+        total_paid: Decimal = await self.get_total_paid(payment.invoice_id)
+
+        if total_paid >= invoice.amount and invoice.amount > 0:
+            invoice.status = PaymentStatus.PAID
+        elif invoice.status == PaymentStatus.PAID and total_paid < invoice.amount:
+            # Оплата была отменена через возврат — счёт вновь ожидает оплаты.
+            invoice.status = PaymentStatus.PENDING
+
+        await self.session.flush()
         await self.session.refresh(payment)
         return payment
 
-    async def get_financial_summary(
-        self,
+    async def get_financial_summary(        self,
         start_date: date,
         end_date: date,
         clinic_id: int | None = None,
@@ -92,13 +102,18 @@ class BillingRepository(BaseRepository[Invoice]):
             inv_stmt = inv_stmt.where(Invoice.clinic_id == clinic_id)
         total_revenue = Decimal(str((await self.session.execute(inv_stmt)).scalar_one()))
 
-        # Оплачено фактически
-        pay_stmt = select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.created_at >= dt_start,
-            Payment.created_at <= dt_end,
+        # Оплачено фактически (с учётом компенсаций возврата: отрицательные платежи вычитаются)
+        pay_stmt = (
+            select(func.coalesce(func.sum(Payment.amount), 0))
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .where(
+                Payment.created_at >= dt_start,
+                Payment.created_at <= dt_end,
+            )
         )
+        if clinic_id:
+            pay_stmt = pay_stmt.where(Invoice.clinic_id == clinic_id)
         paid_revenue = Decimal(str((await self.session.execute(pay_stmt)).scalar_one()))
-
         return {
             "total_appointments": total_appointments,
             "total_procedures": total_procedures,

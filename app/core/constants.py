@@ -16,10 +16,16 @@ DEFAULT_DOCTOR_APPOINTMENT_FEE_PERCENT: Decimal = Decimal("30.00")
 DEFAULT_DOCTOR_PROCEDURE_FEE_PERCENT: Decimal = Decimal("15.00")
 ONE_HUNDRED_PERCENT: Decimal = Decimal(100)
 
+# ----- Защита кассы -----
+# Финансовые проводки неизменяемы: их нельзя удалять или править никому,
+# включая супер-админа. Единственная допустимая операция — контролируемый возврат,
+# который создаётся отдельной записью и фиксируется в журнале аудита.
+CASH_AUDIT_ENTITY: str = "payment"
+ACTION_REFUND_PAYMENT: str = "refund_payment"
+
 # ----- Файлы и медиа -----
 ALLOWED_ANALYSIS_EXTENSIONS: tuple[str, ...] = (
-    ".pdf",
-    ".png",
+    ".pdf",    ".png",
     ".jpg",
     ".jpeg",
     ".tiff",

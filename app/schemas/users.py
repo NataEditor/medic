@@ -39,6 +39,22 @@ class UserCreate(UserBase):
     doctor_profile: DoctorProfileCreate | None = None
 
 
+class AdminCreate(ORMModel):
+    """Создание администратора платформы (только супер-админ).
+
+    Роль фиксирована (SUPER_ADMIN) и не задаётся клиентом —
+    это исключает эскалацию прав через API.
+    """
+
+    email: EmailStr
+    phone: str = Field(..., max_length=50)
+    password: str = Field(..., min_length=8)
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    middle_name: str | None = Field(None, max_length=100)
+    clinic_id: int | None = None
+
+
 class UserUpdate(ORMModel):
     clinic_id: int | None = None
     email: EmailStr | None = None

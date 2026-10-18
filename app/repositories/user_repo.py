@@ -6,6 +6,9 @@ from app.models.entities import DoctorProfile, User
 from app.models.enums import RoleEnum
 from app.repositories.base import BaseRepository
 
+# Роли, относящиеся к администраторам платформы/клиники
+_ADMIN_ROLES = (RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR)
+
 
 class UserRepository(BaseRepository[User]):
     def __init__(self, session: AsyncSession) -> None:
@@ -39,6 +42,12 @@ class UserRepository(BaseRepository[User]):
             stmt = stmt.where(User.clinic_id == clinic_id)
         res = await self.session.execute(stmt)
         return list(res.scalars().all())
+
+    async def is_admin(self, user_id: int) -> bool:
+        """True, если пользователь является администратором (супер-админ или главврач)."""
+        stmt = select(User.role).where(User.id == user_id)
+        role = (await self.session.execute(stmt)).scalar_one_or_none()
+        return role in _ADMIN_ROLES
 
     async def create_doctor_profile(self, profile: DoctorProfile) -> DoctorProfile:
         self.session.add(profile)

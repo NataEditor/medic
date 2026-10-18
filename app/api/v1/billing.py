@@ -15,6 +15,7 @@ from app.schemas.billing import (
     ClinicFinancialReport,
     InvoiceResponse,
     PaymentCreate,
+    PaymentRefundRequest,
     PaymentResponse,
     ServiceCreate,
     ServiceResponse,
@@ -105,9 +106,32 @@ async def pay_invoice(
     return payment
 
 
+@router.post(
+    "/payments/{payment_id}/refund",
+    response_model=PaymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Оформить возврат средств по платежу (руководитель/бухгалтерия)",
+)
+async def refund_payment(
+    payment_id: int,
+    data: PaymentRefundRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[
+        User,
+        Depends(require_roles(RoleEnum.ACCOUNTANT)),
+    ],
+) -> PaymentResponse:
+    """Возврат создаёт компенсирующую проводку; исходный платёж не меняется.
+
+    Факт возврата фиксируется в журнале аудита с указанием причины.
+    """
+    service = BillingService(db)
+    refund = await service.refund_payment(current_user, payment_id, data)
+    return refund
+
+
 # ----- Финансовые отчёты (бухгалтерия и главврач) -----
-@router.get(
-    "/reports/financial",
+@router.get(    "/reports/financial",
     response_model=ClinicFinancialReport,
     summary="Финансовый отчёт по клинике и расчёт врачей (бухгалтерия)",
 )

@@ -3,7 +3,12 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BusinessRuleError, NotFoundError
+from app.core.constants import ACTION_REFUND_PAYMENT, CASH_AUDIT_ENTITY
+from app.core.exceptions import (
+    BusinessRuleError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from app.models.entities import Invoice, Payment, Service, User
 from app.models.enums import PaymentStatus, RoleEnum
 from app.repositories.base import BaseRepository
@@ -11,12 +16,22 @@ from app.repositories.billing_repo import BillingRepository
 from app.schemas.billing import (
     ClinicFinancialReport,
     PaymentCreate,
+    PaymentRefundRequest,
     ServiceCreate,
     ServiceUpdate,
 )
 
 
 class BillingService:
+    """Финансовые операции клиники: прайс, касса и отчёты.
+
+    Инварианты защиты кассы (действуют для ВСЕХ ролей, включая супер-админа):
+    - Нельзя удалять или изменять уже проведённые платежи и оплаченные счета.
+    - Нельзя принять оплату сверх суммы счёта (исключает подлог сумм).
+    - Возврат оформляется отдельной операцией строго через refund_payment с причиной,
+      которая фиксируется в журнале аудита.
+    """
+
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.billing_repo = BillingRepository(session)
@@ -38,12 +53,20 @@ class BillingService:
         return service
 
     async def process_payment(self, cashier: User, data: PaymentCreate) -> Payment:
-        """Ресепшен принимает оплату (нал, карта, СБП)."""
+        """Приём оплаты по счёту (ресепшен/касса)."""
         invoice = await self.session.get(Invoice, data.invoice_id)
         if not invoice:
             raise NotFoundError("Счёт не найден")
         if invoice.status == PaymentStatus.PAID:
             raise BusinessRuleError("Счёт уже полностью оплачен")
+        if invoice.status == PaymentStatus.REFUNDED:
+            raise BusinessRuleError("По счёту оформлен возврат: новые оплаты запрещены")
+
+        # Защита кассы: сумма оплат не может превысить сумму счёта.
+        already_paid = await self.billing_repo.get_total_paid(invoice.id)
+        if already_paid + data.amount > invoice.amount:
+            remainder = invoice.amount - already_paid
+            raise BusinessRuleError(f"Сумма превышает остаток по счёту. К оплате: {remainder}")
 
         payment = Payment(
             invoice_id=data.invoice_id,
@@ -53,8 +76,59 @@ class BillingService:
         )
         return await self.billing_repo.add_payment(payment)
 
-    async def generate_financial_report(
+    async def refund_payment(
         self,
+        actor: User,
+        payment_id: int,
+        data: PaymentRefundRequest,
+    ) -> Payment:
+        """Контролируемый возврат средств по платежу.
+
+        Сама проводка не удаляется и не изменяется — вместо этого создаётся
+        компенсирующая запись возврата, а счёт помечается статусом REFUNDED.
+        Каждое действие фиксируется в журнале аудита.
+        """
+        if actor.role not in (RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR, RoleEnum.ACCOUNTANT):
+            raise PermissionDeniedError("Оформлять возврат может руководитель или бухгалтерия")
+
+        payment = await self.session.get(Payment, payment_id)
+        if not payment:
+            raise NotFoundError("Платёж не найден")
+
+        invoice = await self.session.get(Invoice, payment.invoice_id)
+        if not invoice:
+            raise NotFoundError("Счёт не найден")
+        if invoice.status == PaymentStatus.REFUNDED:
+            raise BusinessRuleError("Возврат по этому счёту уже оформлен")
+
+        # Создаём компенсирующую проводку: исходный платёж остаётся нетронутым.
+        refund = Payment(
+            invoice_id=invoice.id,
+            amount=-payment.amount,
+            method=payment.method,
+            cashier_id=actor.id,
+        )
+        self.session.add(refund)
+
+        invoice.status = PaymentStatus.REFUNDED
+        await self.session.flush()
+
+        # Фиксируем факт возврата в журнале аудита (кто, что, почему)
+        from app.api.deps import record_audit_log
+
+        await record_audit_log(
+            db=self.session,
+            user=actor,
+            action=ACTION_REFUND_PAYMENT,
+            entity_name=CASH_AUDIT_ENTITY,
+            entity_id=payment.id,
+            changes=f'{{"reason": "{data.reason}", "amount": "{payment.amount}"}}',
+        )
+
+        await self.session.refresh(refund)
+        return refund
+
+    async def generate_financial_report(        self,
         accountant: User,
         start_date: date,
         end_date: date,
