@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     private_media_dir: str = "private_media"
     max_upload_size_mb: int = Field(default=10, ge=1, le=100)
 
+    # --- CORS ---
+    # Список разрешённых источников фронтенда через запятую.
+    # Пример: CORS_ORIGINS=http://localhost:3000,https://mis.example.com
+    # "*" разрешает все источники, но тогда cookie/credentials работать не будут.
+    cors_origins: str = "http://localhost:3000,http://localhost:5173"
+
     # --- Bootstrap первого супер-админа ---
     # Если в базе нет ни одного администратора, он создаётся при старте из этих значений.
     # Задаются через .env: BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD и т.д.
@@ -79,6 +85,20 @@ class Settings(BaseSettings):
             f"amqp://{self.rabbitmq_user}:{self.rabbitmq_password}"
             f"@{self.rabbitmq_host}:{self.rabbitmq_port}//"
         )
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Разбирает CORS_ORIGINS в список источников без пробелов."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def cors_allow_credentials(self) -> bool:
+        """Cookie/credentials нельзя сочетать с wildcard-источником '*'.
+
+        Браузеры отклоняют такой ответ, поэтому при '*' принудительно
+        отключаем credentials — это исключает небезопасную конфигурацию.
+        """
+        return "*" not in self.cors_origins_list
 
 
 @lru_cache

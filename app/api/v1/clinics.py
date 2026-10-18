@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_roles
+from app.api.deps import get_current_user, require_roles
 from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE
 from app.core.exceptions import NotFoundError
 from app.db.session import get_db
@@ -19,6 +19,7 @@ router = APIRouter(prefix="/clinics", tags=["Клиники и филиалы"])
 @router.get("", response_model=PaginatedResponse[ClinicResponse], summary="Список клиник")
 async def list_clinics(
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
     page: int = DEFAULT_PAGE,
     page_size: int = DEFAULT_PAGE_SIZE,
 ) -> PaginatedResponse[ClinicResponse]:
@@ -55,6 +56,7 @@ async def create_clinic(
 async def get_clinic(
     clinic_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
 ) -> Clinic:
     repo = BaseRepository(Clinic, db)
     clinic = await repo.get_by_id(clinic_id)

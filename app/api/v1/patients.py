@@ -42,7 +42,7 @@ async def grant_patient_access(
     _: Annotated[User, Depends(require_roles(RoleEnum.RECEPTIONIST))],
     login_phone: Annotated[
         str | None,
-        Body(None, embed=True, description="Телефон для входа; иначе берётся из карты пациента"),
+        Body(embed=True, description="Телефон для входа; иначе берётся из карты пациента"),
     ] = None,
 ) -> PatientAccessResponse:
     """Создаёт учётную запись пациента и отправляет временный пароль по SMS.

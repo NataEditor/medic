@@ -3,7 +3,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_roles
+from app.api.deps import get_current_user, require_roles
+from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE
 from app.db.session import get_db
 from app.models.entities import User
 from app.models.enums import RoleEnum
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/users", tags=["Пользователи"])
 )
 async def list_doctors(
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
     clinic_id: int | None = None,
 ) -> list[User]:
     repo = UserRepository(db)
@@ -34,8 +36,8 @@ async def list_doctors(
 async def list_users(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_roles(RoleEnum.HEAD_DOCTOR))],
-    page: int = 1,
-    page_size: int = 50,
+    page: int = DEFAULT_PAGE,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> list[User]:
     repo = UserRepository(db)
     items, _ = await repo.list_paginated(

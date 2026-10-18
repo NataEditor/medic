@@ -70,15 +70,16 @@ API МИС для сети медицинских клиник.
     redoc_url="/redoc",
 )
 
-# CORS — разрешаем запросы от фронтенда
+# CORS — источники фронтенда задаются через CORS_ORIGINS в .env.
+# При '*' credentials автоматически отключаются (cors_allow_credentials),
+# чтобы не создавать небезопасную комбинацию.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next) -> Response:
