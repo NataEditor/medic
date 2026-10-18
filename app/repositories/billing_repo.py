@@ -45,6 +45,11 @@ class BillingRepository(BaseRepository[Invoice]):
         )
         return Decimal(str((await self.session.execute(stmt)).scalar_one()))
 
+    async def get_invoice_by_appointment(self, appointment_id: int) -> Invoice | None:
+        """Счёт, выставленный по конкретному приёму (если есть)."""
+        stmt = select(Invoice).where(Invoice.appointment_id == appointment_id)
+        res = await self.session.execute(stmt)
+        return res.scalar_one_or_none()
     async def add_payment(self, payment: Payment) -> Payment:
         self.session.add(payment)
         await self.session.flush()

@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.entities import Appointment
+from app.models.entities import Appointment, User
 from app.models.enums import AppointmentStatus
 from app.repositories.base import BaseRepository
 
@@ -27,6 +27,23 @@ class AppointmentRepository(BaseRepository[Appointment]):
         )
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
+
+    async def lock_doctor(self, doctor_id: int) -> None:
+        """Блокирует строку врача на время транзакции (SELECT ... FOR UPDATE).
+
+        Защита от гонки при бронировании: два параллельных запроса на один слот
+        будут выполняться последовательно, а не оба пройдут проверку занятости.
+        SQLite не поддерживает FOR UPDATE — там блокировка пропускается
+        (в тестовой среде гонок нет).
+        """
+        bind = self.session.get_bind()
+        if bind is not None and bind.dialect.name != "postgresql":
+            return
+
+        stmt = (
+            select(User.id).where(User.id == doctor_id).with_for_update()
+        )
+        await self.session.execute(stmt)
 
     async def check_doctor_overlap(
         self,

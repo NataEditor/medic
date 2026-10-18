@@ -52,6 +52,9 @@ class AnalysisResultResponse(ORMModel):
 
 class AssignmentCreate(ORMModel):
     record_id: int
+    clinic_id: int | None = Field(
+        None, description="Клиника назначения; по умолчанию — клиника врача"
+    )
     service_id: int | None = None
     type: AssignmentType
     title: str = Field(..., max_length=255)
@@ -59,7 +62,6 @@ class AssignmentCreate(ORMModel):
     frequency: str | None = None
     duration_days: int | None = Field(None, ge=1, le=365)
     instructions: str | None = None
-
 
 class AssignmentUpdate(ORMModel):
     title: str | None = None
@@ -73,6 +75,7 @@ class AssignmentUpdate(ORMModel):
 class AssignmentResponse(ORMModel):
     id: int
     record_id: int
+    clinic_id: int
     doctor_id: int
     service_id: int | None = None
     type: AssignmentType

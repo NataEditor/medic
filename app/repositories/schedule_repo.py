@@ -4,8 +4,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import Appointment, DoctorSchedule, TimeOff
+from app.models.enums import AppointmentStatus
 from app.repositories.base import BaseRepository
 
+# Статусы, при которых приём занимает время врача.
+# Отменённый приём и неявка слот НЕ занимают — время освобождается.
+BUSY_APPOINTMENT_STATUSES: tuple[AppointmentStatus, ...] = (
+    AppointmentStatus.SCHEDULED,
+    AppointmentStatus.WAITING,
+    AppointmentStatus.IN_PROGRESS,
+    AppointmentStatus.COMPLETED,
+)
 
 class ScheduleRepository(BaseRepository[DoctorSchedule]):
     def __init__(self, session: AsyncSession) -> None:
@@ -59,7 +68,7 @@ class ScheduleRepository(BaseRepository[DoctorSchedule]):
         doctor_id: int,
         on_date: date,
     ) -> list[Appointment]:
-        """Активные приёмы врача в указанный день (кроме отменённых и неявившихся)."""
+        """Приёмы врача в указанный день, занимающие время (без отменённых и неявок)."""
         day_start = datetime.combine(on_date, time.min)
         day_end = day_start + timedelta(days=1)
 
@@ -67,6 +76,7 @@ class ScheduleRepository(BaseRepository[DoctorSchedule]):
             select(Appointment)
             .where(
                 Appointment.doctor_id == doctor_id,
+                Appointment.status.in_(BUSY_APPOINTMENT_STATUSES),
                 Appointment.scheduled_at >= day_start,
                 Appointment.scheduled_at < day_end,
             )

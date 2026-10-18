@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.utils import intervals_overlap
 from app.models.entities import DoctorSchedule, TimeOff
-from app.models.enums import AppointmentStatus
 from app.repositories.schedule_repo import ScheduleRepository
 from app.schemas.schedules import (
     DoctorDayScheduleResponse,
@@ -13,14 +12,6 @@ from app.schemas.schedules import (
     DoctorScheduleUpdate,
     FreeSlot,
     TimeOffCreate,
-)
-
-# Статусы приёма, которые занимают слот в расписании врача.
-ACTIVE_APPOINTMENT_STATUSES: tuple[AppointmentStatus, ...] = (
-    AppointmentStatus.SCHEDULED,
-    AppointmentStatus.WAITING,
-    AppointmentStatus.IN_PROGRESS,
-    AppointmentStatus.COMPLETED,
 )
 
 
@@ -135,7 +126,7 @@ class ScheduleService:
                 free_slots=[],
             )
 
-        # 3. Занятые интервалы (активные приёмы)
+        # 3. Занятые интервалы (приёмы, занимающие время; отменённые уже отфильтрованы)
         appointments = await self.repo.get_busy_intervals(doctor_id, on_date)
         busy_intervals = [
             FreeSlot(
@@ -152,9 +143,7 @@ class ScheduleService:
                 appt.scheduled_at.replace(tzinfo=None) + timedelta(minutes=appt.duration_minutes),
             )
             for appt in appointments
-            if appt.status in ACTIVE_APPOINTMENT_STATUSES
-        ]
-        # 4. Свободные слоты: идём по смене с шагом slot_minutes
+        ]        # 4. Свободные слоты: идём по смене с шагом slot_minutes
         shift_start = datetime.combine(on_date, schedule.start_time)
         shift_end = datetime.combine(on_date, schedule.end_time)
         break_range: tuple[datetime, datetime] | None = None

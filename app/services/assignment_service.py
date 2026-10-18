@@ -1,14 +1,36 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
-from app.models.entities import AnalysisResult, Assignment, ProcedureExecution, User
-from app.models.enums import AssignmentStatus, AssignmentType, RoleEnum
+from app.models.entities import (
+    AnalysisResult,
+    Assignment,
+    Invoice,
+    MedicalRecord,
+    ProcedureExecution,
+    Service,
+    User,
+)
+from app.models.enums import (
+    AssignmentStatus,
+    AssignmentType,
+    PaymentStatus,
+    RoleEnum,
+)
 from app.repositories.assignment_repo import AssignmentRepository
 from app.schemas.assignments import (
     AnalysisResultCreate,
     AssignmentCreate,
     AssignmentUpdate,
     ProcedureExecutionCreate,
+)
+
+# Типы назначений, за которые выставляется счёт (анализы, процедуры, диагностика).
+BILLABLE_ASSIGNMENT_TYPES: frozenset[AssignmentType] = frozenset(
+    {
+        AssignmentType.ANALYSIS,
+        AssignmentType.PROCEDURE,
+        AssignmentType.DIAGNOSTIC,
+    }
 )
 
 
@@ -18,12 +40,22 @@ class AssignmentService:
         self.assignment_repo = AssignmentRepository(session)
 
     async def create_assignment(self, doctor: User, data: AssignmentCreate) -> Assignment:
-        """Только врач может создавать назначения."""
+        """Создаёт назначение и (при наличии цены) счёт на оплату.
+
+        Счёт выставляется сразу при назначении — пациент оплачивает его
+        на ресепшене. Это закрывает «серые» бесплатные процедуры/анализы.
+        """
         if doctor.role not in (RoleEnum.DOCTOR, RoleEnum.HEAD_DOCTOR):
             raise PermissionDeniedError("Назначения может создавать только врач")
 
+        # Клиника: из запроса, иначе — клиника врача (обязательна для счёта)
+        clinic_id = data.clinic_id or doctor.clinic_id
+        if clinic_id is None:
+            raise BusinessRuleError("Не удалось определить клинику для назначения")
+
         assignment = Assignment(
             record_id=data.record_id,
+            clinic_id=clinic_id,
             doctor_id=doctor.id,
             service_id=data.service_id,
             type=data.type,
@@ -34,8 +66,41 @@ class AssignmentService:
             instructions=data.instructions.strip() if data.instructions else None,
             status=AssignmentStatus.PRESCRIBED,
         )
-        return await self.assignment_repo.create(assignment)
+        created = await self.assignment_repo.create(assignment)
 
+        # Счёт за платное назначение (анализ/процедура/диагностика с ценой в прайсе)
+        await self._create_invoice_for_assignment(created, clinic_id)
+
+        return created
+
+    async def _create_invoice_for_assignment(
+        self,
+        assignment: Assignment,
+        clinic_id: int,
+    ) -> Invoice | None:
+        """Создаёт счёт по назначению, если у услуги есть положительная цена."""
+        if assignment.type not in BILLABLE_ASSIGNMENT_TYPES or assignment.service_id is None:
+            return None
+
+        service = await self.session.get(Service, assignment.service_id)
+        if service is None or service.price <= 0:
+            return None
+
+        # Определяем пациента по медкарте (для счёта нужен patient_id)
+        record = await self.session.get(MedicalRecord, assignment.record_id)
+        if record is None:
+            raise BusinessRuleError("Медкарта для назначения не найдена")
+
+        invoice = Invoice(
+            assignment_id=assignment.id,
+            patient_id=record.patient_id,
+            clinic_id=clinic_id,
+            amount=service.price,
+            status=PaymentStatus.PENDING,
+        )
+        self.session.add(invoice)
+        await self.session.flush()
+        return invoice
     async def update_assignment(
         self,
         doctor: User,

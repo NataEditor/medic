@@ -6,6 +6,7 @@ from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.models.entities import Appointment, Invoice, Service
 from app.models.enums import AppointmentStatus, PaymentStatus
 from app.repositories.appointment_repo import AppointmentRepository
+from app.repositories.billing_repo import BillingRepository
 from app.schemas.appointments import (
     AppointmentCreate,
     AppointmentStatusUpdate,
@@ -18,10 +19,10 @@ class AppointmentService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.appt_repo = AppointmentRepository(session)
+        self.billing_repo = BillingRepository(session)
         self.schedule_service = ScheduleService(session)
 
-    async def create_appointment(
-        self,
+    async def create_appointment(        self,
         data: AppointmentCreate,
         *,
         enforce_schedule: bool = True,
@@ -35,10 +36,12 @@ class AppointmentService:
         if data.scheduled_at < datetime.now(UTC):
             raise BusinessRuleError("Нельзя записать на прошедшее время")
 
+        # Блокируем слот врача на время транзакции — защита от двойного бронирования
+        await self.appt_repo.lock_doctor(data.doctor_id)
+
         # Проверка занятости врача
         has_overlap = await self.appt_repo.check_doctor_overlap(
-            doctor_id=data.doctor_id,
-            start_time=data.scheduled_at,
+            doctor_id=data.doctor_id,            start_time=data.scheduled_at,
             duration_minutes=data.duration_minutes,
         )
         if has_overlap:
@@ -129,9 +132,30 @@ class AppointmentService:
         # Нельзя возобновить отменённый/завершённый приём
         if appt.status in (AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED):
             raise BusinessRuleError("Нельзя изменить статус закрытого приёма")
+
         appt.status = data.status
         if data.cancel_reason:
             appt.cancel_reason = data.cancel_reason
 
+        # Отмена приёма освобождает слот и аннулирует неоплаченный счёт
+        if data.status in (AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW):
+            await self._cancel_invoice_for_cancelled_appointment(appt)
+
         await self.session.flush()
         return (await self.appt_repo.get_detailed(appt.id)) or appt
+    async def _cancel_invoice_for_cancelled_appointment(self, appt: Appointment) -> None:
+        """Аннулирует счёт при отмене приёма, если по нему ещё нет оплат.
+
+        Если пациент уже оплатил — счёт не трогаем: возврат оформляется
+        отдельной контролируемой операцией бухгалтерии (refund).
+        """
+        invoice = await self.billing_repo.get_invoice_by_appointment(appt.id)
+        if invoice is None:
+            return
+
+        paid = await self.billing_repo.get_total_paid(invoice.id)
+        if paid > 0:
+            # Оплаченный счёт авто-отменять нельзя — это компетенция бухгалтерии
+            return
+
+        invoice.status = PaymentStatus.CANCELLED
