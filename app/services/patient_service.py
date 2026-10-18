@@ -1,13 +1,21 @@
+from datetime import timedelta
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.constants import PASSPORT_SCAN_DIR_NAME, PASSPORT_SCAN_FILENAME
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.core.utils import format_medical_record_number, utcnow
-from app.models.entities import MedicalRecord, Patient
+from app.core.constants import (
+    PASSPORT_SCAN_DIR_NAME,
+    PASSPORT_SCAN_FILENAME,
+    TEMP_PASSWORD_TTL_HOURS,
+)
+from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError, ValidationError
+from app.core.security import hash_password
+from app.core.utils import format_medical_record_number, generate_temp_password, utcnow
+from app.models.entities import MedicalRecord, Patient, User
+from app.models.enums import RoleEnum
 from app.repositories.patient_repo import PatientRepository
+from app.repositories.user_repo import UserRepository
 from app.schemas.patients import PatientCreate, PatientUpdate
 
 
@@ -15,7 +23,7 @@ class PatientService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.patient_repo = PatientRepository(session)
-
+        self.user_repo = UserRepository(session)
     async def create_patient_with_record(self, data: PatientCreate) -> Patient:
         """Ресепшен регистрирует пациента по паспорту — сразу открывается ЭМК.
 
@@ -135,3 +143,61 @@ class PatientService:
         if not scan_path.exists():
             raise NotFoundError("Файл скана паспорта отсутствует в хранилище")
         return scan_path
+
+    async def grant_portal_access(self, patient_id: int, login_phone: str) -> tuple[str, User]:
+        """Выдаёт пациенту доступ в личный кабинет.
+
+        Создаёт (или обновляет) учётную запись User с ролью PATIENT, генерирует
+        временный пароль и помечает его обязательным к смене. Открытый пароль
+        возвращается вызывающему для отправки по SMS и в БД не сохраняется.
+
+        Требует наличия телефона — на него уходит код входа.
+        """
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if not patient:
+            raise NotFoundError("Пациент не найден")
+
+        phone = login_phone.strip()
+        if not phone:
+            raise BusinessRuleError("Для доступа в ЛК необходимо указать телефон пациента")
+
+        # Телефон уже занят другим пользователем (не этим пациентом)?
+        existing_user = await self.user_repo.get_by_phone(phone)
+        if existing_user and patient.user_id != existing_user.id:
+            raise ConflictError("Этот телефон уже привязан к другой учётной записи")
+
+        temp_password = generate_temp_password()
+
+        if patient.user_id:
+            user = await self.user_repo.get_by_id(patient.user_id)
+            if user is None:
+                raise NotFoundError("Учётная запись пациента не найдена")
+            user.phone = phone
+        else:
+            # Пациенты входят по телефону; email у них может отсутствовать,
+            # поэтому используем служебный (суррогатный) адрес.
+            user = User(
+                email=f"patient_{patient.id}@medic.local",
+                phone=phone,
+                hashed_password=hash_password(temp_password),
+                role=RoleEnum.PATIENT,
+                first_name=patient.first_name,
+                last_name=patient.last_name,
+                middle_name=patient.middle_name,
+                is_active=True,
+            )
+            user = await self.user_repo.create(user)
+            patient.user_id = user.id
+
+        user.hashed_password = hash_password(temp_password)
+        user.must_change_password = True
+        user.temp_password_expires_at = utcnow() + timedelta(hours=TEMP_PASSWORD_TTL_HOURS)
+
+        await self.session.flush()
+        await self.session.refresh(user)
+
+        from app.tasks.notifications import send_temp_password_sms
+
+        send_temp_password_sms.delay(phone, temp_password, TEMP_PASSWORD_TTL_HOURS)
+
+        return temp_password, user

@@ -7,7 +7,7 @@ celery_app = Celery(
     "medic",
     broker=settings.rabbitmq_url,
     backend=settings.redis_url,
-    include=["app.tasks.scheduled", "app.tasks.image_processing"],
+    include=["app.tasks.scheduled", "app.tasks.image_processing", "app.tasks.notifications"],
 )
 
 celery_app.conf.update(

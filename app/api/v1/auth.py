@@ -7,7 +7,13 @@ from app.api.deps import get_current_user, require_roles, require_super_admin
 from app.db.session import get_db
 from app.models.entities import User
 from app.models.enums import RoleEnum
-from app.schemas.auth import LoginRequest, RefreshTokenRequest, TokenResponse
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    PhoneLoginRequest,
+    RefreshTokenRequest,
+    TokenResponse,
+)
 from app.schemas.common import StatusResponse
 from app.schemas.users import AdminCreate, UserCreate, UserResponse
 from app.services.admin_service import AdminService
@@ -16,7 +22,7 @@ from app.services.auth_service import AuthService
 router = APIRouter(prefix="/auth", tags=["Аутентификация"])
 
 
-@router.post("/login", response_model=TokenResponse, summary="Вход в систему")
+@router.post("/login", response_model=TokenResponse, summary="Вход сотрудника (email + пароль)")
 async def login(
     data: LoginRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -24,6 +30,35 @@ async def login(
     service = AuthService(db)
     return await service.authenticate(data)
 
+
+@router.post(
+    "/login/patient",
+    response_model=TokenResponse,
+    summary="Вход пациента в личный кабинет (телефон + пароль)",
+)
+async def login_patient(
+    data: PhoneLoginRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> TokenResponse:
+    service = AuthService(db)
+    return await service.authenticate_patient(data)
+
+
+@router.post(
+    "/change-password",
+    response_model=TokenResponse,
+    summary="Смена пароля (пациент обязан сменить временный пароль)",
+)
+async def change_password(
+    data: ChangePasswordRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> TokenResponse:
+    service = AuthService(db)
+    await service.change_password(current_user, data.current_password, data.new_password)
+    # После смены пароля выдаём свежие токены (флаг must_change_password снят)
+    await db.refresh(current_user)
+    return service._issue_tokens(current_user)
 
 @router.post("/refresh", response_model=TokenResponse, summary="Обновление access токена")
 async def refresh_token(

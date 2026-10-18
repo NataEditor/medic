@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,12 +11,14 @@ from app.core.constants import (
     DEFAULT_PAGE,
     DEFAULT_PAGE_SIZE,
     PASSPORT_SCAN_MEDIA_TYPE,
+    TEMP_PASSWORD_TTL_HOURS,
 )
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.models.entities import Patient, User
 from app.models.enums import RoleEnum
 from app.repositories.patient_repo import PatientRepository
+from app.schemas.auth import PatientAccessResponse
 from app.schemas.common import PaginatedResponse
 from app.schemas.patients import (
     PatientCreate,
@@ -27,6 +29,45 @@ from app.schemas.patients import (
 from app.services.patient_service import PatientService
 
 router = APIRouter(prefix="/patients", tags=["Пациенты"])
+
+
+@router.post(
+    "/{patient_id}/grant-access",
+    response_model=PatientAccessResponse,
+    summary="Выдать пациенту доступ в личный кабинет (ресепшен)",
+)
+async def grant_patient_access(
+    patient_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_roles(RoleEnum.RECEPTIONIST))],
+    login_phone: Annotated[
+        str | None,
+        Body(None, embed=True, description="Телефон для входа; иначе берётся из карты пациента"),
+    ] = None,
+) -> PatientAccessResponse:
+    """Создаёт учётную запись пациента и отправляет временный пароль по SMS.
+
+    Открытый пароль в ответе НЕ возвращается — он уходит только пациенту
+    по SMS. После первого входа пациент обязан сменить пароль.
+    """
+    service = PatientService(db)
+    patient = await service.patient_repo.get_by_id(patient_id)
+    if not patient:
+        raise NotFoundError("Пациент не найден")
+
+    phone = login_phone or patient.phone
+    if not phone:
+        raise BusinessRuleError("У пациента не указан телефон — укажите его при выдаче доступа")
+
+    _, user = await service.grant_portal_access(patient_id, phone)
+    await db.commit()
+
+    return PatientAccessResponse(
+        patient_id=patient_id,
+        user_id=user.id,
+        login_phone=user.phone,
+        temp_password_ttl_hours=TEMP_PASSWORD_TTL_HOURS,
+    )
 
 
 @router.post(

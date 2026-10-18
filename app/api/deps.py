@@ -92,6 +92,22 @@ async def get_current_user(
     return user
 
 
+async def get_current_patient_user(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Доступ к медицинским данным пациента.
+
+    Блокируется, пока пациент не сменил временный пароль из SMS:
+    так исключается ситуация, когда посторонний узнал одноразовый код,
+    но ещё не получил доступ к врачебной тайне.
+    """
+    if current_user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Сначала смените временный пароль (эндпоинт /auth/change-password)",
+        )
+    return current_user
+
 def require_roles(*allowed_roles: RoleEnum) -> Callable[..., User]:
     """Декоратор зависимостей: проверяет наличие одной из разрешённых ролей.
 

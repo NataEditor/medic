@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import get_current_patient_user, require_roles
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.models.entities import MedicalRecord, MedicalRecordEntry, User
@@ -22,11 +22,11 @@ router = APIRouter(prefix="/medical-records", tags=["Электронная ме
 @router.get(
     "/my",
     response_model=MedicalRecordResponse,
-    summary="Моя медкарта (для пациента)",
+    summary="Моя медкарта (для пациента, после смены временного пароля)",
 )
 async def get_my_record(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_patient_user)],
 ) -> MedicalRecord:
     if current_user.role != RoleEnum.PATIENT or not current_user.patient_profile:
         raise PermissionDeniedError("Эндпоинт доступен только пациентам")
