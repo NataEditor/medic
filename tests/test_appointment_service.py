@@ -70,7 +70,7 @@ class TestAppointmentService(unittest.IsolatedAsyncioTestCase):
                 scheduled_at=past_time,
             )
             with self.assertRaises(BusinessRuleError):
-                await service.create_appointment(dto)
+                await service.create_appointment(dto, enforce_schedule=False)
 
     async def test_cannot_double_book_doctor(self) -> None:
         async with self.session_factory() as session:
@@ -83,13 +83,29 @@ class TestAppointmentService(unittest.IsolatedAsyncioTestCase):
                 scheduled_at=future_time,
                 duration_minutes=30,
             )
-            # Первая запись успешна
-            await service.create_appointment(dto)
+            # Первая запись успешна (график врача проверяем отдельным тестом)
+            await service.create_appointment(dto, enforce_schedule=False)
             await session.commit()
 
             # Вторая запись в то же время вызывает ошибку
             with self.assertRaises(BusinessRuleError):
-                await service.create_appointment(dto)
+                await service.create_appointment(dto, enforce_schedule=False)
+
+    async def test_rejects_time_outside_doctor_shift(self) -> None:
+        """Без графика врача запись вне смены отклоняется при enforce_schedule=True."""
+        async with self.session_factory() as session:
+            service = AppointmentService(session)
+            future_time = datetime.now(UTC) + timedelta(days=2)
+            dto = AppointmentCreate(
+                clinic_id=self.clinic_id,
+                doctor_id=self.doctor_id,
+                patient_id=self.patient_id,
+                scheduled_at=future_time,
+                duration_minutes=30,
+            )
+            # У врача нет ни одной смены в графике -> время не входит в приём
+            with self.assertRaises(BusinessRuleError):
+                await service.create_appointment(dto, enforce_schedule=True)
 
 
 if __name__ == "__main__":

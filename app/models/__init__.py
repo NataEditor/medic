@@ -5,6 +5,7 @@ from app.models.entities import (
     AuditLog,
     Clinic,
     DoctorProfile,
+    DoctorSchedule,
     Invoice,
     MedicalRecord,
     MedicalRecordEntry,
@@ -12,6 +13,7 @@ from app.models.entities import (
     Payment,
     ProcedureExecution,
     Service,
+    TimeOff,
     User,
 )
 from app.models.enums import (
@@ -34,6 +36,7 @@ __all__ = [
     "AuditLog",
     "Clinic",
     "DoctorProfile",
+    "DoctorSchedule",
     "Invoice",
     "MedicalRecord",
     "MedicalRecordEntry",
@@ -45,5 +48,6 @@ __all__ = [
     "ProcedureExecutionStatus",
     "RoleEnum",
     "Service",
+    "TimeOff",
     "User",
 ]

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -123,6 +124,12 @@ class User(Base, TimestampMixin):
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     middle_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # --- Первый вход в ЛК пациента по временному паролю ---
+    # True, если пароль выдан ресепшеном/SMS и требует обязательной смены при входе.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    temp_password_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     clinic: Mapped[Clinic | None] = relationship(back_populates="users")
     doctor_profile: Mapped["DoctorProfile | None"] = relationship(
@@ -172,6 +179,85 @@ class DoctorProfile(Base, TimestampMixin):
     )
 
     user: Mapped[User] = relationship(back_populates="doctor_profile")
+
+
+class DoctorSchedule(Base, TimestampMixin):
+    """Шаблон рабочей смены врача по дню недели.
+
+    Роль в системе:
+    Задаёт регулярный график врача: в какие дни недели и часы он принимает
+    пациентов, когда у него обеденный перерыв и в каком кабинете.
+    Из этих шаблонов расписание на конкретную дату рассчитывается «на лету»
+    (слоты не хранятся в БД — их занимают записи Appointment).
+
+    Поля:
+    - id: Идентификатор смены.
+    - doctor_id: Врач, которому принадлежит смена (каскадное удаление с профилем).
+    - clinic_id: Филиал, в котором работает врач в эту смену.
+    - weekday: День недели (0 = понедельник ... 6 = воскресенье).
+    - start_time: Время начала смены (например, 09:00).
+    - end_time: Время окончания смены (например, 18:00).
+    - break_start: Начало обеденного перерыва (может быть пустым).
+    - break_end: Конец обеденного перерыва (может быть пустым).
+    - cabinet_number: Кабинет приёма в рамках этой смены.
+    - is_active: Флаг активности смены (для временного отключения без удаления).
+
+    Ограничения:
+    - Гарантируется, что смена врача в один день недели не дублируется (по doctor_id + weekday).
+    """
+
+    __tablename__ = "doctor_schedules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doctor_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    clinic_id: Mapped[int] = mapped_column(
+        ForeignKey("clinics.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    weekday: Mapped[int] = mapped_column(Integer, nullable=False)  # 0=Пн ... 6=Вс
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    break_start: Mapped[time | None] = mapped_column(Time, nullable=True)
+    break_end: Mapped[time | None] = mapped_column(Time, nullable=True)
+    cabinet_number: Mapped[str | None] = mapped_column(String(SHORT_STRING_LENGTH), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    doctor: Mapped[User] = relationship()
+    clinic: Mapped[Clinic] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("doctor_id", "weekday", name="uq_doctor_schedule_weekday"),
+    )
+
+
+class TimeOff(Base, TimestampMixin):
+    """Отсутствие врача: отпуск, больничный, обучение (конкретный период).
+
+    Роль в системе:
+    Временно исключает врача из расписания на заданный интервал дат.
+    В отличие от DoctorSchedule (регулярный шаблон), TimeOff перекрывает
+    конкретные календарные даты: в этот период врач пациента не принимает.
+
+    Поля:
+    - id: Идентификатор периода отсутствия.
+    - doctor_id: Отсутствующий врач (каскадное удаление с профилем).
+    - start_date: Первый день отсутствия (включительно).
+    - end_date: Последний день отсутствия (включительно).
+    - reason: Причина (отпуск, больничный и т.п.).
+    """
+
+    __tablename__ = "time_offs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doctor_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    start_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(String(TITLE_STRING_LENGTH), nullable=True)
+
+    doctor: Mapped[User] = relationship()
 
 
 class Patient(Base, TimestampMixin):
@@ -498,6 +584,9 @@ class Assignment(Base, TimestampMixin):
     record_id: Mapped[int] = mapped_column(
         ForeignKey("medical_records.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    clinic_id: Mapped[int] = mapped_column(
+        ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     service_id: Mapped[int | None] = mapped_column(
         ForeignKey("services.id", ondelete="SET NULL"), nullable=True
@@ -521,6 +610,9 @@ class Assignment(Base, TimestampMixin):
     record: Mapped[MedicalRecord] = relationship(back_populates="assignments")
     doctor: Mapped[User] = relationship()
     service: Mapped[Service | None] = relationship()
+    invoice: Mapped["Invoice | None"] = relationship(
+        back_populates="assignment", uselist=False
+    )
     executions: Mapped[list["ProcedureExecution"]] = relationship(
         back_populates="assignment", cascade="all, delete-orphan"
     )
@@ -646,6 +738,9 @@ class Invoice(Base, TimestampMixin):
     appointment_id: Mapped[int | None] = mapped_column(
         ForeignKey("appointments.id", ondelete="SET NULL"), unique=True, nullable=True
     )
+    assignment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assignments.id", ondelete="SET NULL"), unique=True, nullable=True
+    )
     patient_id: Mapped[int] = mapped_column(
         ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -661,6 +756,7 @@ class Invoice(Base, TimestampMixin):
     )
 
     appointment: Mapped[Appointment | None] = relationship(back_populates="invoice")
+    assignment: Mapped["Assignment | None"] = relationship(back_populates="invoice")
     payments: Mapped[list["Payment"]] = relationship(
         back_populates="invoice", cascade="all, delete-orphan"
     )

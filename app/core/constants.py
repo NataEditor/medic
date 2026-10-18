@@ -6,10 +6,20 @@ DEFAULT_PAGE_SIZE: int = 20
 MAX_PAGE_SIZE: int = 100
 
 # ----- Длительность приёмов (в минутах) -----
+# Стандартный приём 20-30 минут: шаг сетки расписания и дефолтная длительность.
 DEFAULT_APPOINTMENT_DURATION_MINUTES: int = 30
-MIN_APPOINTMENT_DURATION_MINUTES: int = 10
+MIN_APPOINTMENT_DURATION_MINUTES: int = 20
 MAX_APPOINTMENT_DURATION_MINUTES: int = 240
 MAX_SCHEDULE_LOOKAHEAD_HOURS: int = 4
+
+# ----- График работы врачей -----
+# Рабочий день по умолчанию: смена и обеденный перерыв (по шаблону дня недели).
+DEFAULT_SHIFT_START_HOUR: int = 9
+DEFAULT_SHIFT_END_HOUR: int = 18
+DEFAULT_BREAK_START_HOUR: int = 13
+DEFAULT_BREAK_END_HOUR: int = 14
+# Минимальный шаг сетки записи (кратность слота).
+SLOT_STEP_MINUTES: int = 10
 
 # ----- Финансовые ставки по умолчанию (проценты) -----
 DEFAULT_DOCTOR_APPOINTMENT_FEE_PERCENT: Decimal = Decimal("30.00")
@@ -23,9 +33,15 @@ ONE_HUNDRED_PERCENT: Decimal = Decimal(100)
 CASH_AUDIT_ENTITY: str = "payment"
 ACTION_REFUND_PAYMENT: str = "refund_payment"
 
+# ----- Личный кабинет пациента -----
+# Срок жизни временного пароля, отправленного пациенту по SMS.
+TEMP_PASSWORD_TTL_HOURS: int = 24
+TEMP_PASSWORD_LENGTH: int = 8
+
 # ----- Файлы и медиа -----
 ALLOWED_ANALYSIS_EXTENSIONS: tuple[str, ...] = (
-    ".pdf",    ".png",
+    ".pdf",
+    ".png",
     ".jpg",
     ".jpeg",
     ".tiff",
@@ -33,6 +49,7 @@ ALLOWED_ANALYSIS_EXTENSIONS: tuple[str, ...] = (
 
 # Скан паспорта принимаем только картинкой jpg — так требует бумажный документооборот
 ALLOWED_PASSPORT_SCAN_EXTENSIONS: tuple[str, ...] = (".jpg", ".jpeg")
+
 # ----- Pillow / Обработка изображений -----
 MAX_IMAGE_DIMENSION: int = 2560
 THUMBNAIL_SIZE: tuple[int, int] = (400, 400)

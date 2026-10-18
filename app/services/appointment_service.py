@@ -11,20 +11,31 @@ from app.schemas.appointments import (
     AppointmentStatusUpdate,
     AppointmentUpdate,
 )
+from app.services.schedule_service import ScheduleService
 
 
 class AppointmentService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.appt_repo = AppointmentRepository(session)
+        self.schedule_service = ScheduleService(session)
 
-    async def create_appointment(self, data: AppointmentCreate) -> Appointment:
-        """Создание записи на приём (ресепшен/пациент). Проверяет занятость врача."""
+    async def create_appointment(
+        self,
+        data: AppointmentCreate,
+        *,
+        enforce_schedule: bool = True,
+    ) -> Appointment:
+        """Создание записи на приём (ресепшен/пациент).
+
+        Проверяет: время не в прошлом, не пересекается с другими приёмами
+        и попадает в рабочую смену врача (кроме обеда и отпусков).
+        """
         # Проверка даты — нельзя записать в прошлое
         if data.scheduled_at < datetime.now(UTC):
             raise BusinessRuleError("Нельзя записать на прошедшее время")
 
-        # Проверка пересечения приёмов у врача
+        # Проверка занятости врача
         has_overlap = await self.appt_repo.check_doctor_overlap(
             doctor_id=data.doctor_id,
             start_time=data.scheduled_at,
@@ -32,6 +43,18 @@ class AppointmentService:
         )
         if has_overlap:
             raise BusinessRuleError("У врача уже есть запись на это время")
+
+        # Проверка, что время входит в рабочую смену врача (график задан администратором)
+        if enforce_schedule:
+            available = await self.schedule_service.is_doctor_available(
+                doctor_id=data.doctor_id,
+                scheduled_at=data.scheduled_at,
+                duration_minutes=data.duration_minutes,
+            )
+            if not available:
+                raise BusinessRuleError(
+                    "Врач не принимает в это время: выходной, отпуск, обед или вне смены"
+                )
 
         appointment = Appointment(
             clinic_id=data.clinic_id,
@@ -81,6 +104,16 @@ class AppointmentService:
             if has_overlap:
                 raise BusinessRuleError("Новое время пересекается с другой записью врача")
 
+            # Перенос тоже должен попадать в рабочую смену врача
+            available = await self.schedule_service.is_doctor_available(
+                doctor_id=target_doctor,
+                scheduled_at=target_time,
+                duration_minutes=target_duration,
+            )
+            if not available:
+                raise BusinessRuleError(
+                    "Врач не принимает в это время: выходной, отпуск, обед или вне смены"
+                )
         update_dict = data.model_dump(exclude_unset=True)
         for key, val in update_dict.items():
             setattr(appt, key, val)

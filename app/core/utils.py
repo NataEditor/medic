@@ -29,3 +29,16 @@ def calculate_total_pages(total: int, page_size: int) -> int:
     if total <= 0 or page_size <= 0:
         return 0
     return (total + page_size - 1) // page_size
+
+
+def intervals_overlap(
+    start_a: datetime,
+    end_a: datetime,
+    start_b: datetime,
+    end_b: datetime,
+) -> bool:
+    """Проверяет пересечение двух временных интервалов [start, end).
+
+    Границы считаются полуоткрытыми: приём 09:00-09:30 и 09:30-10:00
+    не пересекаются (конец одного равен началу другого)."""
+    return start_a < end_b and start_b < end_a
