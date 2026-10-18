@@ -54,7 +54,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S105", "S106"]
-
+# CLI — интерактивная консольная утилита: input()/getpass() вне async-цикла
+"app/cli.py" = ["ASYNC250"]
 [tool.ruff.format]
 quote-style = "double"
 

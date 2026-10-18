@@ -95,3 +95,40 @@ docker compose up -d --build
 * Мониторинг фоновых задач Flower: `http://localhost:5555` (логин/пароль: `admin/admin`)
 * Nginx Reverse Proxy: `http://localhost:80`
 * RabbitMQ Management: `http://localhost:15672`
+
+---
+
+## 🔑 Первый вход в систему (bootstrap)
+
+При первом старте, если в базе нет администраторов, система автоматически создаёт
+супер-админа из переменных окружения `BOOTSTRAP_ADMIN_*` (по умолчанию
+`admin@medic.local` / `Admin12345`). **В production смените пароль и отключите
+`BOOTSTRAP_ADMIN_ON_STARTUP`, создавая админа через CLI.**
+
+### CLI-команды
+
+```bash
+# Создать супер-админа вручную (интерактивно запросит пароль)
+.venv/Scripts/python -m app.cli create-superadmin --email admin@clinic.ru --phone +79990000000
+
+# Наполнить базу демонстрационными данными (клиника, врач, пациент, прайс, график)
+.venv/Scripts/python -m app.cli seed-demo
+
+# Список пользователей
+.venv/Scripts/python -m app.cli list-users
+```
+
+Или через `make`: `make superadmin`, `make demo`, `make users`.
+
+### Основные эндпоинты аутентификации
+
+| Метод | Путь | Назначение |
+|---|---|---|
+| POST | `/api/v1/auth/login` | Вход сотрудника (email + пароль) |
+| POST | `/api/v1/auth/login/patient` | Вход пациента в ЛК (телефон + пароль) |
+| POST | `/api/v1/auth/change-password` | Смена пароля |
+| POST | `/api/v1/patients/{id}/grant-access` | Выдать пациенту доступ в ЛК (ресепшен) |
+
+Личный кабинет пациента работает по схеме: ресепшен выдаёт доступ → пациент
+получает временный пароль по SMS → входит по телефону → обязан сменить пароль,
+после чего открывается доступ к медкарте и анализам.

@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     private_media_dir: str = "private_media"
     max_upload_size_mb: int = Field(default=10, ge=1, le=100)
 
+    # --- Bootstrap первого супер-админа ---
+    # Если в базе нет ни одного администратора, он создаётся при старте из этих значений.
+    # Задаются через .env: BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD и т.д.
+    bootstrap_admin_email: str = "admin@medic.local"
+    bootstrap_admin_password: str = "Admin12345"
+    bootstrap_admin_phone: str = "+70000000000"
+    bootstrap_admin_first_name: str = "Super"
+    bootstrap_admin_last_name: str = "Admin"
+    # Автосоздание админа при старте приложения (в prod ставьте false и создавайте через CLI)
+    bootstrap_admin_on_startup: bool = True
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def database_url(self) -> str:

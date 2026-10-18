@@ -18,9 +18,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Жизненный цикл приложения (startup / shutdown)."""
     setup_logging()
     logger.info("Старт приложения MEDIC (режим: {})", settings.app_env)
+
+    # Первичная инициализация: создаём первого супер-админа и клинику по умолчанию,
+    # если база ещё пустая (решает проблему «курицы и яйца»).
+    await _bootstrap_if_needed()
+
     yield
     logger.info("Остановка приложения MEDIC")
 
+
+async def _bootstrap_if_needed() -> None:
+    """Мягкая инициализация БД при старте.
+
+    Ошибки подключения к БД на стадии старта не должны валить приложение:
+    логируем предупреждение и продолжаем (например, БД ещё не поднята).
+    """
+    if not settings.bootstrap_admin_on_startup:
+        return
+
+    try:
+        from app.db.session import async_session_factory
+        from app.services.bootstrap_service import BootstrapService
+
+        async with async_session_factory() as session:
+            service = BootstrapService(session)
+            clinic = await service.ensure_default_clinic()
+            created = await service.ensure_super_admin_on_startup()
+            if created and created.clinic_id is None:
+                created.clinic_id = clinic.id
+            await session.commit()
+    except Exception as exc:
+        logger.warning("Пропуск bootstrap при старте: {}", exc)
 
 app = FastAPI(
     title="MEDIC — Медицинская информационная система",
