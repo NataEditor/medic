@@ -51,6 +51,19 @@ async def upload_analysis(
     record = await db.get(MedicalRecord, assignment.record_id)
     if not record or record.patient_id != patient_id:
         raise BusinessRuleError("Пациент не соответствует указанному назначению")
+
+    # Ресепшен только прикладывает файл (скан/бланк), но не заполняет
+    # медицинское содержимое: заключение и показатели — зона медперсонала.
+    if current_user.has_role(RoleEnum.RECEPTIONIST) and not current_user.has_any_role(
+        RoleEnum.DOCTOR, RoleEnum.NURSE, RoleEnum.HEAD_DOCTOR
+    ):
+        if summary:
+            raise PermissionDeniedError(
+                "Ресепшен может приложить только файл, без заключения"
+            )
+        if not file or not file.filename:
+            raise BusinessRuleError("Ресепшен должен приложить файл результата")
+
     file_path: str | None = None
     if file and file.filename:
         # Валидация расширения файла

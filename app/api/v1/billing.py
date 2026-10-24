@@ -31,17 +31,30 @@ from app.services.refund_service import RefundService
 router = APIRouter(prefix="/billing", tags=["Биллинг, касса и бухгалтерия"])
 
 # ----- Прайс-лист услуг -----
-@router.get("/services", response_model=list[ServiceResponse], summary="Каталог услуг клиники")
+@router.get(
+    "/services",
+    response_model=list[ServiceResponse],
+    summary="Каталог услуг клиники (доступен и пациентам)",
+)
 async def list_services(
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_current_user)],
     only_active: bool = True,
 ) -> list[Service]:
+    """Прайс-лист видят все авторизованные, включая пациента.
+
+    Пациенту показываем только активные услуги: архивные позиции
+    (снятые с продажи) ему не нужны и вводят в заблуждение.
+    """
     repo = BaseRepository(Service, db)
+
+    # Пациент всегда видит только активный прайс
+    if current_user.has_role(RoleEnum.PATIENT):
+        only_active = True
+
     filters = [Service.is_active.is_(True)] if only_active else None
     items, _ = await repo.list_paginated(limit=500, filters=filters)
     return items
-
 
 @router.post(
     "/services",
