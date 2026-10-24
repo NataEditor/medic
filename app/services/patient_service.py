@@ -181,7 +181,7 @@ class PatientService:
                 email=f"patient_{patient.id}@medic.local",
                 phone=phone,
                 hashed_password=hash_password(temp_password),
-                role=RoleEnum.PATIENT,
+                roles=[RoleEnum.PATIENT.value],
                 first_name=patient.first_name,
                 last_name=patient.last_name,
                 middle_name=patient.middle_name,

@@ -24,7 +24,7 @@ class AdminService:
 
     @staticmethod
     def _ensure_is_super_admin(actor: User) -> None:
-        if actor.role != RoleEnum.SUPER_ADMIN:
+        if not actor.has_role(RoleEnum.SUPER_ADMIN):
             raise PermissionDeniedError("Операция доступна только владельцу платформы")
 
     async def create_admin(
@@ -52,7 +52,7 @@ class AdminService:
             email=email.lower().strip(),
             phone=phone.strip(),
             hashed_password=hash_password(password),
-            role=RoleEnum.SUPER_ADMIN,
+            roles=[RoleEnum.SUPER_ADMIN.value],
             first_name=first_name.strip(),
             last_name=last_name.strip(),
             middle_name=middle_name.strip() if middle_name else None,
@@ -68,7 +68,7 @@ class AdminService:
             action="create_admin",
             entity_name="user",
             entity_id=created.id,
-            changes=f'{{"email": "{created.email}", "role": "{created.role.value}"}}',
+            changes=f'{{"email": "{created.email}", "roles": "{created.roles}"}}',
         )
         return created
 
@@ -86,7 +86,7 @@ class AdminService:
         if not target:
             raise NotFoundError("Пользователь не найден")
 
-        if target.role in (RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR):
+        if target.has_any_role(RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR):
             raise BusinessRuleError("Удаление администратора запрещено. Сначала понизьте его роль.")
 
         await self.user_repo.delete(target)

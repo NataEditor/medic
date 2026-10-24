@@ -97,7 +97,7 @@ async def get_my_analyses(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_patient_user)],
 ) -> list[AnalysisResult]:
-    if current_user.role != RoleEnum.PATIENT or not current_user.patient_profile:
+    if not current_user.has_role(RoleEnum.PATIENT) or not current_user.patient_profile:
         raise PermissionDeniedError("Доступно только пациентам")
     repo = BaseRepository(AnalysisResult, db)
     items, _ = await repo.list_paginated(

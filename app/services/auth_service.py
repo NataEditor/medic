@@ -42,7 +42,7 @@ class AuthService:
         указанному при регистрации на ресепшене.
         """
         user = await self.user_repo.get_by_phone(data.phone)
-        if not user or user.role != RoleEnum.PATIENT:
+        if not user or not user.has_role(RoleEnum.PATIENT):
             raise AuthenticationError("Пациент с таким телефоном не найден")
         if not user.is_active:
             raise AuthenticationError("Учётная запись деактивирована")
@@ -124,7 +124,7 @@ class AuthService:
             email=data.email.lower().strip(),
             phone=data.phone.strip(),
             hashed_password=hash_password(data.password),
-            role=data.role,
+            roles=[data.role.value],
             first_name=data.first_name.strip(),
             last_name=data.last_name.strip(),
             middle_name=data.middle_name.strip() if data.middle_name else None,

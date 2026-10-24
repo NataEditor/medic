@@ -45,7 +45,7 @@ class AssignmentService:
         Счёт выставляется сразу при назначении — пациент оплачивает его
         на ресепшене. Это закрывает «серые» бесплатные процедуры/анализы.
         """
-        if doctor.role not in (RoleEnum.DOCTOR, RoleEnum.HEAD_DOCTOR):
+        if not doctor.has_any_role(RoleEnum.DOCTOR, RoleEnum.HEAD_DOCTOR):
             raise PermissionDeniedError("Назначения может создавать только врач")
 
         # Клиника: из запроса, иначе — клиника врача (обязательна для счёта)
@@ -112,7 +112,7 @@ class AssignmentService:
             raise NotFoundError("Назначение не найдено")
 
         # Изменять назначение может создавший его врач или главврач
-        if doctor.role != RoleEnum.HEAD_DOCTOR and assignment.doctor_id != doctor.id:
+        if not doctor.has_role(RoleEnum.HEAD_DOCTOR) and assignment.doctor_id != doctor.id:
             raise PermissionDeniedError("Вы можете редактировать только свои назначения")
 
         update_dict = data.model_dump(exclude_unset=True)
@@ -127,7 +127,7 @@ class AssignmentService:
         if not assignment:
             raise NotFoundError("Назначение не найдено")
 
-        if doctor.role != RoleEnum.HEAD_DOCTOR and assignment.doctor_id != doctor.id:
+        if not doctor.has_role(RoleEnum.HEAD_DOCTOR) and assignment.doctor_id != doctor.id:
             raise PermissionDeniedError("Вы можете удалять только свои назначения")
 
         # Если процедура уже выполнена хотя бы раз — удалять нельзя, только отменять
@@ -141,7 +141,7 @@ class AssignmentService:
         data: ProcedureExecutionCreate,
     ) -> ProcedureExecution:
         """Медсестра отмечает факт выполнения процедуры/манипуляции."""
-        if nurse.role not in (RoleEnum.NURSE, RoleEnum.HEAD_DOCTOR):
+        if not nurse.has_any_role(RoleEnum.NURSE, RoleEnum.HEAD_DOCTOR):
             raise PermissionDeniedError("Отметку о выполнении может вносить только медсестра")
 
         assignment = await self.assignment_repo.get_by_id(data.assignment_id)

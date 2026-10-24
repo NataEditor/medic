@@ -23,12 +23,15 @@ class BootstrapService:
         self.user_repo = UserRepository(session)
 
     async def has_any_admin(self) -> bool:
-        """Есть ли в системе хотя бы один администратор (супер-админ или главврач)."""
+        """Есть ли в системе хотя бы один администратор (супер-админ, админ клиники, главврач)."""
         stmt = select(func.count(User.id)).where(
-            User.role.in_((RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR))
+            User.has_any_role_sql(
+                RoleEnum.SUPER_ADMIN,
+                RoleEnum.CLINIC_ADMIN,
+                RoleEnum.HEAD_DOCTOR,
+            )
         )
         return int((await self.session.execute(stmt)).scalar_one()) > 0
-
     async def create_super_admin(
         self,
         *,
@@ -54,7 +57,7 @@ class BootstrapService:
             email=email.lower().strip(),
             phone=phone.strip(),
             hashed_password=hash_password(password),
-            role=RoleEnum.SUPER_ADMIN,
+            roles=[RoleEnum.SUPER_ADMIN.value],
             first_name=first_name.strip(),
             last_name=last_name.strip(),
             middle_name=middle_name.strip() if middle_name else None,

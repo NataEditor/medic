@@ -36,7 +36,7 @@ class UserRepository(BaseRepository[User]):
         stmt = (
             select(User)
             .options(selectinload(User.doctor_profile))
-            .where(User.role == RoleEnum.DOCTOR, User.is_active.is_(True))
+            .where(User.has_any_role_sql(RoleEnum.DOCTOR), User.is_active.is_(True))
         )
         if clinic_id:
             stmt = stmt.where(User.clinic_id == clinic_id)
@@ -45,9 +45,11 @@ class UserRepository(BaseRepository[User]):
 
     async def is_admin(self, user_id: int) -> bool:
         """True, если пользователь является администратором (супер-админ или главврач)."""
-        stmt = select(User.role).where(User.id == user_id)
-        role = (await self.session.execute(stmt)).scalar_one_or_none()
-        return role in _ADMIN_ROLES
+        stmt = select(User.roles).where(User.id == user_id)
+        roles = (await self.session.execute(stmt)).scalar_one_or_none()
+        if not roles:
+            return False
+        return any(r.value in roles for r in _ADMIN_ROLES)
 
     async def create_doctor_profile(self, profile: DoctorProfile) -> DoctorProfile:
         self.session.add(profile)

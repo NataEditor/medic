@@ -88,7 +88,7 @@ class DemoSeedService:
             email=email,
             phone="+74950000001",
             hashed_password=hash_password(DEMO_PASSWORD),
-            role=RoleEnum.DOCTOR,
+            roles=[RoleEnum.DOCTOR.value],
             first_name="Иван",
             last_name="Петров",
             middle_name="Сергеевич",

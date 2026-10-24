@@ -43,7 +43,7 @@ async def create_appointment(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Appointment:
     # Пациент может записать только себя
-    if current_user.role == RoleEnum.PATIENT and (
+    if current_user.has_role(RoleEnum.PATIENT) and (
         not current_user.patient_profile or current_user.patient_profile.id != data.patient_id
     ):
         raise PermissionDeniedError("Пациент может записать только себя")
@@ -71,17 +71,17 @@ async def list_appointments(
     repo = AppointmentRepository(db)
 
     # Ролевые ограничения фильтрации
-    if current_user.role == RoleEnum.PATIENT:
+    if current_user.has_role(RoleEnum.PATIENT):
         # Пациент видит строго только свои приёмы
         if not current_user.patient_profile:
             return PaginatedResponse(
                 items=[], total=0, page=page, page_size=page_size, total_pages=0
             )
         patient_id = current_user.patient_profile.id
-    elif current_user.role == RoleEnum.DOCTOR:
+    elif current_user.has_role(RoleEnum.DOCTOR):
         # Врач по умолчанию видит свои приёмы
         doctor_id = current_user.id
-    elif current_user.role in (RoleEnum.RECEPTIONIST, RoleEnum.NURSE, RoleEnum.ACCOUNTANT):
+    elif current_user.has_any_role(RoleEnum.RECEPTIONIST, RoleEnum.NURSE, RoleEnum.ACCOUNTANT):
         clinic_id = clinic_id or current_user.clinic_id
 
     items, total = await repo.filter_appointments(
@@ -144,7 +144,7 @@ async def update_appointment(
         raise NotFoundError("Приём не найден")
 
     # Врач переносит только свои приёмы; ресепшен — любые.
-    if current_user.role == RoleEnum.DOCTOR and appt.doctor_id != current_user.id:
+    if current_user.has_role(RoleEnum.DOCTOR) and appt.doctor_id != current_user.id:
         raise PermissionDeniedError("Врач может переносить только свои приёмы")
 
     service = AppointmentService(db)
@@ -177,7 +177,7 @@ async def update_status(
         raise NotFoundError("Приём не найден")
 
     # Медсестра отмечает только факт прибытия/начала приёма, не закрывая его.
-    if current_user.role == RoleEnum.NURSE:
+    if current_user.has_role(RoleEnum.NURSE):
         if data.status not in NURSE_ALLOWED_STATUSES:
             raise PermissionDeniedError(
                 "Медсестра может отметить только «ожидает» или «идёт приём»"

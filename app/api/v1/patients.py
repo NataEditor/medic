@@ -5,7 +5,7 @@ from fastapi import APIRouter, Body, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import get_current_user, require_patient_creator, require_roles
 from app.core.constants import (
     ALLOWED_PASSPORT_SCAN_EXTENSIONS,
     DEFAULT_PAGE,
@@ -79,12 +79,13 @@ async def grant_patient_access(
 async def create_patient(
     data: PatientCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[
-        User,
-        Depends(require_roles(RoleEnum.RECEPTIONIST, RoleEnum.DOCTOR)),
-    ],
+    _: Annotated[User, Depends(require_patient_creator())],
 ) -> Patient:
-    """Уникальность пациента определяется парой серия+номер паспорта."""
+    """Создание карты — только регистратура и выше.
+
+    Врач карту не создаёт: профиль с паспортом заводит тот, кто проверил
+    документ (152-ФЗ). Уникальность — пара серия+номер паспорта.
+    """
     service = PatientService(db)
     return await service.create_patient_with_record(data)
 
@@ -238,7 +239,7 @@ async def get_my_patient_card(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Patient:
     """Пациент видит только свою карточку; чужой скан паспорта ему недоступен."""
-    if current_user.role != RoleEnum.PATIENT or not current_user.patient_profile:
+    if not current_user.has_role(RoleEnum.PATIENT) or not current_user.patient_profile:
         raise PermissionDeniedError("Эндпоинт доступен только пациентам")
 
     repo = PatientRepository(db)

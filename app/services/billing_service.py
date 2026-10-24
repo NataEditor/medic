@@ -88,7 +88,7 @@ class BillingService:
         компенсирующая запись возврата, а счёт помечается статусом REFUNDED.
         Каждое действие фиксируется в журнале аудита.
         """
-        if actor.role not in (RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR, RoleEnum.ACCOUNTANT):
+        if not actor.has_any_role(RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR, RoleEnum.ACCOUNTANT):
             raise PermissionDeniedError("Оформлять возврат может руководитель или бухгалтерия")
 
         payment = await self.session.get(Payment, payment_id)
@@ -136,13 +136,13 @@ class BillingService:
         clinic_id: int | None = None,
     ) -> ClinicFinancialReport:
         """Генерация финансового отчёта для бухгалтерии и главврача."""
-        if accountant.role not in (RoleEnum.ACCOUNTANT, RoleEnum.HEAD_DOCTOR):
+        if not accountant.has_any_role(RoleEnum.ACCOUNTANT, RoleEnum.HEAD_DOCTOR):
             from app.core.exceptions import PermissionDeniedError
 
             raise PermissionDeniedError("Доступ к финотчётам имеет только бухгалтерия/главврач")
         # Если не главврач — бухгалтер видит только свою клинику
         target_clinic = clinic_id
-        if accountant.role == RoleEnum.ACCOUNTANT:
+        if accountant.has_role(RoleEnum.ACCOUNTANT):
             target_clinic = accountant.clinic_id
 
         summary = await self.billing_repo.get_financial_summary(

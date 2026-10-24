@@ -103,7 +103,7 @@ async def _run_list_users(_: argparse.Namespace) -> int:
                 "id={} | {} | роль={} | активен={}",
                 user.id,
                 user.email,
-                user.role.value,
+                ','.join(user.roles),
                 user.is_active,
             )
     return 0

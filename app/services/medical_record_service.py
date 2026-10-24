@@ -21,7 +21,7 @@ class MedicalRecordService:
         data: MedicalRecordEntryCreate,
     ) -> MedicalRecordEntry:
         """Врач добавляет клиническую запись в карту (осмотр, диагноз МКБ-10)."""
-        if doctor.role not in (RoleEnum.DOCTOR, RoleEnum.HEAD_DOCTOR):
+        if not doctor.has_any_role(RoleEnum.DOCTOR, RoleEnum.HEAD_DOCTOR):
             raise PermissionDeniedError("Только врач может вносить клинические записи в карту")
 
         record = await self.session.get(MedicalRecord, record_id)

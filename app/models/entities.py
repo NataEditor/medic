@@ -1,5 +1,7 @@
+import json
 from datetime import date, datetime, time
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -13,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     Time,
+    TypeDecorator,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -43,6 +46,37 @@ from app.models.enums import (
 
 # Для совместимости с SQLite в unit-тестах: используем Text, если JSONB недоступен
 JSONType = JSONB().with_variant(Text, "sqlite")
+
+
+class StringListType(TypeDecorator):
+    """Список строк, хранимый как JSON.
+
+    На PostgreSQL — JSONB, на SQLite — TEXT с JSON-сериализацией.
+    Нужен, чтобы мультиролевая модель (users.roles) работала в обоих движках:
+    SQLite не умеет биндить Python-список напрямую.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(JSONB())
+        return dialect.type_descriptor(Text())
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            return list(value)
+        return json.dumps(list(value))
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return json.loads(value)
+        return list(value)
 
 
 class Clinic(Base, TimestampMixin):
@@ -115,10 +149,13 @@ class User(Base, TimestampMixin):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     phone: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[RoleEnum] = mapped_column(
-        Enum(RoleEnum, name="user_role_enum", native_enum=False),
+    # Мультиролевая модель: у одного человека может быть несколько ролей
+    # (врач + главврач, админ + ресепшен). Права суммируются.
+    # Хранится как JSON-массив строк, например ["doctor", "head_doctor"].
+    roles: Mapped[list[str]] = mapped_column(
+        StringListType(),
         nullable=False,
-        index=True,
+        default=list,
     )
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -142,6 +179,54 @@ class User(Base, TimestampMixin):
     @property
     def full_name(self) -> str:
         return build_full_name(self.last_name, self.first_name, self.middle_name)
+
+    @property
+    def role(self) -> RoleEnum:
+        """Основная роль (первая в списке) — для обратной совместимости.
+
+        Новый код должен использовать has_role()/has_any_role().
+        """
+        if not self.roles:
+            return RoleEnum.PATIENT
+        return RoleEnum(self.roles[0])
+
+    @role.setter
+    def role(self, value: RoleEnum | str) -> None:
+        """Сеттер для обратной совместимости: User(role=RoleEnum.DOCTOR).
+
+        Устанавливает единственную роль. Для нескольких ролей используйте roles.
+        """
+        raw = value.value if isinstance(value, RoleEnum) else str(value)
+        self.roles = [raw]
+
+    @property
+    def role_enums(self) -> list[RoleEnum]:
+        """Все роли пользователя в виде перечисления."""
+        return [RoleEnum(r) for r in self.roles]
+
+    def has_role(self, role: RoleEnum) -> bool:
+        """Есть ли у пользователя конкретная роль."""
+        return role.value in self.roles
+
+    def has_any_role(self, *roles: RoleEnum) -> bool:
+        """Есть ли хотя бы одна из перечисленных ролей."""
+        return any(r.value in self.roles for r in roles)
+
+    @staticmethod
+    def has_any_role_sql(*roles: RoleEnum) -> Any:
+        """SQL-условие: у пользователя есть хотя бы одна из ролей.
+
+        Работает и на PostgreSQL (JSONB), и на SQLite (TEXT с JSON).
+        Используется в запросах вместо User.role.in_(...).
+        """
+        from sqlalchemy import String, cast, or_
+
+        return or_(
+            *[
+                cast(User.roles, String).like(f'%"{role.value}"%')
+                for role in roles
+            ]
+        )
 
 
 class DoctorProfile(Base, TimestampMixin):

@@ -3,7 +3,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_patient_user, require_roles
+from app.api.deps import (
+    ensure_medical_access,
+    get_current_patient_user,
+    is_medical_staff,
+    require_roles,
+)
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.models.entities import MedicalRecord, MedicalRecordEntry, User
@@ -28,7 +33,7 @@ async def get_my_record(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_patient_user)],
 ) -> MedicalRecord:
-    if current_user.role != RoleEnum.PATIENT or not current_user.patient_profile:
+    if not current_user.has_role(RoleEnum.PATIENT) or not current_user.patient_profile:
         raise PermissionDeniedError("Эндпоинт доступен только пациентам")
 
     repo = PatientRepository(db)
@@ -46,7 +51,7 @@ async def get_my_record(
 async def get_patient_record(
     patient_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[
+    current_user: Annotated[
         User,
         Depends(
             require_roles(
@@ -57,6 +62,13 @@ async def get_patient_record(
         ),
     ],
 ) -> MedicalRecord:
+    """Медкарта пациента. Врач — только «по касанию» (есть приём с пациентом)."""
+    # Ресепшен видит карточку без ЭМК, поэтому для него доступ к ЭМК закрыт
+    if current_user.has_role(RoleEnum.RECEPTIONIST) and not is_medical_staff(current_user):
+        raise PermissionDeniedError("Ресепшен не имеет доступа к ЭМК")
+
+    await ensure_medical_access(db, current_user, patient_id)
+
     repo = PatientRepository(db)
     record = await repo.get_medical_record(patient_id)
     if not record:
@@ -64,8 +76,7 @@ async def get_patient_record(
     return record
 
 
-@router.post(
-    "/{record_id}/entries",
+@router.post(    "/{record_id}/entries",
     response_model=MedicalRecordEntryResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Внести запись в медкарту по итогам приёма (только врач)",

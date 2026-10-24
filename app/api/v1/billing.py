@@ -92,16 +92,15 @@ async def get_invoice(
     if not inv:
         raise NotFoundError("Счёт не найден")
 
-    role = current_user.role
     finance_roles = (
         RoleEnum.ACCOUNTANT,
         RoleEnum.RECEPTIONIST,
         RoleEnum.SUPER_ADMIN,
         RoleEnum.HEAD_DOCTOR,
     )
-    if role in finance_roles:
+    if current_user.has_any_role(*finance_roles):
         return inv
-    if role == RoleEnum.PATIENT:
+    if current_user.has_role(RoleEnum.PATIENT):
         if current_user.patient_profile and inv.patient_id == current_user.patient_profile.id:
             return inv
         raise PermissionDeniedError("Доступ к чужому счёту запрещён")

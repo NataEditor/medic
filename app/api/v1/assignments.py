@@ -3,10 +3,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_roles
-from app.core.exceptions import NotFoundError
+from app.api.deps import ensure_medical_access, is_medical_staff, require_roles
+from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.db.session import get_db
-from app.models.entities import Assignment, ProcedureExecution, User
+from app.models.entities import Assignment, MedicalRecord, ProcedureExecution, User
 from app.models.enums import AssignmentStatus, AssignmentType, RoleEnum
 from app.repositories.assignment_repo import AssignmentRepository
 from app.schemas.assignments import (
@@ -45,7 +45,7 @@ async def create_assignment(
 async def list_assignments(
     record_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[
+    current_user: Annotated[
         User,
         Depends(
             require_roles(
@@ -58,13 +58,22 @@ async def list_assignments(
     type_filter: AssignmentType | None = None,
     status_filter: AssignmentStatus | None = None,
 ) -> list[Assignment]:
+    """Назначения по медкарте. Врач — только «по касанию» (есть приём)."""
+    record = await db.get(MedicalRecord, record_id)
+    if not record:
+        raise NotFoundError("Медкарта не найдена")
+
+    if current_user.has_role(RoleEnum.RECEPTIONIST) and not is_medical_staff(current_user):
+        raise PermissionDeniedError("Ресепшен не имеет доступа к назначениям")
+
+    await ensure_medical_access(db, current_user, record.patient_id)
+
     repo = AssignmentRepository(db)
     return await repo.list_for_record(
         record_id=record_id,
         type_=type_filter,
         status=status_filter,
     )
-
 
 @router.get(
     "/{assignment_id}",

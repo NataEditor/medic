@@ -141,7 +141,7 @@ class BillingRepository(BaseRepository[Invoice]):
         stmt = (
             select(User)
             .options(selectinload(User.doctor_profile))
-            .where(User.role == RoleEnum.DOCTOR, User.is_active.is_(True))
+            .where(User.has_any_role_sql(RoleEnum.DOCTOR), User.is_active.is_(True))
         )
         if clinic_id:
             stmt = stmt.where(User.clinic_id == clinic_id)
