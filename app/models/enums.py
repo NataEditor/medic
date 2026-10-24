@@ -150,6 +150,22 @@ class PaymentStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class RefundRequestStatus(str, enum.Enum):
+    """Статус заявки на возврат средств (двойной контроль).
+
+    Деньги проходят полный цикл только через двух людей:
+    - PENDING: ресепшен/касса создал заявку, деньги ещё у клиники.
+    - APPROVED: бухгалтерия подтвердила — создана сторно-проводка.
+    - REJECTED: бухгалтерия отклонила заявку (с причиной).
+    - CANCELLED: заявку отозвал инициатор до рассмотрения.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+
+
 class PaymentMethod(str, enum.Enum):
     """Способ проведения оплаты в кассе клиники.
 

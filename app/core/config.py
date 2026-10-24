@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     private_media_dir: str = "private_media"
     max_upload_size_mb: int = Field(default=10, ge=1, le=100)
 
+    # --- Финансовые правила ---
+    # Требовать оплату счёта до выполнения процедуры.
+    # Для клиник с пакетной предоплатой можно отключить (false).
+    require_payment_before_procedure: bool = True
+
     # --- CORS ---
     # Список разрешённых источников фронтенда через запятую.
     # Пример: CORS_ORIGINS=http://localhost:3000,https://mis.example.com

@@ -13,6 +13,7 @@ from app.models.entities import (
     Patient,
     Payment,
     ProcedureExecution,
+    RefundRequest,
     Service,
     TimeOff,
     User,
@@ -26,6 +27,7 @@ from app.models.enums import (
     PaymentMethod,
     PaymentStatus,
     ProcedureExecutionStatus,
+    RefundRequestStatus,
     RoleEnum,
 )
 
@@ -52,6 +54,8 @@ __all__ = [
     "PaymentStatus",
     "ProcedureExecution",
     "ProcedureExecutionStatus",
+    "RefundRequest",
+    "RefundRequestStatus",
     "RoleEnum",
     "Service",
     "TimeOff",

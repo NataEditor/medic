@@ -8,7 +8,7 @@ from app.api.deps import get_current_user, require_roles
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.db.session import get_db
 from app.models.entities import Invoice, Service, User
-from app.models.enums import RoleEnum
+from app.models.enums import RefundRequestStatus, RoleEnum
 from app.repositories.base import BaseRepository
 from app.repositories.billing_repo import BillingRepository
 from app.schemas.billing import (
@@ -17,14 +17,18 @@ from app.schemas.billing import (
     PaymentCreate,
     PaymentRefundRequest,
     PaymentResponse,
+    RefundRequestCreate,
+    RefundRequestResponse,
+    RefundRequestReview,
+    ReversalCreate,
     ServiceCreate,
     ServiceResponse,
     ServiceUpdate,
 )
 from app.services.billing_service import BillingService
+from app.services.refund_service import RefundService
 
 router = APIRouter(prefix="/billing", tags=["Биллинг, касса и бухгалтерия"])
-
 
 # ----- Прайс-лист услуг -----
 @router.get("/services", response_model=list[ServiceResponse], summary="Каталог услуг клиники")
@@ -174,3 +178,88 @@ async def get_financial_report(
         end_date=end_date,
         clinic_id=clinic_id,
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Двойной контроль возвратов: заявка → подтверждение бухгалтерией
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.post(
+    "/refund-requests",
+    response_model=RefundRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать заявку на возврат (касса/ресепшен)",
+)
+async def create_refund_request(
+    data: RefundRequestCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[
+        User,
+        Depends(require_roles(RoleEnum.RECEPTIONIST, RoleEnum.ACCOUNTANT)),
+    ],
+) -> RefundRequestResponse:
+    """Деньги не двигаются: заявка ждёт решения бухгалтерии."""
+    service = RefundService(db)
+    return await service.create_refund_request(current_user, data)
+
+
+@router.get(
+    "/refund-requests",
+    response_model=list[RefundRequestResponse],
+    summary="Список заявок на возврат (бухгалтерия)",
+)
+async def list_refund_requests(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_roles(RoleEnum.ACCOUNTANT))],
+    status_filter: RefundRequestStatus | None = Query(None, alias="status"),
+) -> list[RefundRequestResponse]:
+    service = RefundService(db)
+    return await service.list_refund_requests(status_filter)
+
+
+@router.post(
+    "/refund-requests/{request_id}/review",
+    response_model=RefundRequestResponse,
+    summary="Подтвердить или отклонить заявку (только бухгалтерия)",
+)
+async def review_refund_request(
+    request_id: int,
+    data: RefundRequestReview,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_roles(RoleEnum.ACCOUNTANT))],
+) -> RefundRequestResponse:
+    """При подтверждении создаётся сторно-проводка; оригинал не меняется."""
+    service = RefundService(db)
+    return await service.review_refund_request(current_user, request_id, data)
+
+
+@router.post(
+    "/refund-requests/{request_id}/cancel",
+    response_model=RefundRequestResponse,
+    summary="Отозвать заявку до рассмотрения (автор заявки)",
+)
+async def cancel_refund_request(
+    request_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> RefundRequestResponse:
+    service = RefundService(db)
+    return await service.cancel_refund_request(current_user, request_id)
+
+
+@router.post(
+    "/payments/{payment_id}/reverse",
+    response_model=PaymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Сторно-проводка (только бухгалтерия, оригинал сохраняется)",
+)
+async def reverse_payment(
+    payment_id: int,
+    data: ReversalCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_roles(RoleEnum.ACCOUNTANT))],
+) -> PaymentResponse:
+    """Компенсирующая проводка: оригинал не удаляется и не меняется."""
+    service = RefundService(db)
+    return await service.create_reversal(current_user, payment_id, data)

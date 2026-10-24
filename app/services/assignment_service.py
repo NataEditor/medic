@@ -1,5 +1,7 @@
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
 from app.models.entities import (
     AnalysisResult,
@@ -140,7 +142,11 @@ class AssignmentService:
         nurse: User,
         data: ProcedureExecutionCreate,
     ) -> ProcedureExecution:
-        """Медсестра отмечает факт выполнения процедуры/манипуляции."""
+        """Медсестра отмечает факт выполнения процедуры/манипуляции.
+
+        Если клиника работает по предоплате (REQUIRE_PAYMENT_BEFORE_PROCEDURE),
+        процедура выполняется только по оплаченному счёту.
+        """
         if not nurse.has_any_role(RoleEnum.NURSE, RoleEnum.HEAD_DOCTOR):
             raise PermissionDeniedError("Отметку о выполнении может вносить только медсестра")
 
@@ -150,13 +156,26 @@ class AssignmentService:
         if assignment.type != AssignmentType.PROCEDURE:
             raise BusinessRuleError("Отметку выполнения можно делать только для процедур")
 
+        # Проверка оплаты: процедура только по оплаченному счёту
+        invoice_id: int | None = None
+        if settings.require_payment_before_procedure:
+            invoice = await self._get_paid_invoice_for_assignment(assignment.id)
+            if invoice is None:
+                raise BusinessRuleError(
+                    "Процедура не оплачена. Пациент должен оплатить счёт на ресепшене."
+                )
+            invoice_id = invoice.id
+
         execution = ProcedureExecution(
             assignment_id=data.assignment_id,
             nurse_id=nurse.id,
+            performed_by_id=nurse.id,
             executed_at=data.executed_at,
+            performed_at=data.executed_at,
             status=data.status,
             materials_used=data.materials_used,
             notes=data.notes,
+            invoice_id=invoice_id,
         )
         saved = await self.assignment_repo.add_execution(execution)
 
@@ -166,8 +185,15 @@ class AssignmentService:
 
         return saved
 
-    async def record_analysis(
-        self,
+    async def _get_paid_invoice_for_assignment(self, assignment_id: int) -> Invoice | None:
+        """Возвращает оплаченный счёт по назначению (или None)."""
+        stmt = select(Invoice).where(
+            Invoice.assignment_id == assignment_id,
+            Invoice.status == PaymentStatus.PAID,
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def record_analysis(        self,
         patient_id: int,
         worker: User | None,
         data: AnalysisResultCreate,

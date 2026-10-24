@@ -43,6 +43,7 @@ from app.models.enums import (
     PaymentMethod,
     PaymentStatus,
     ProcedureExecutionStatus,
+    RefundRequestStatus,
     RoleEnum,
 )
 
@@ -785,6 +786,10 @@ class Assignment(Base, TimestampMixin):
         nullable=False,
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Вид процедуры для отчёта производительности (массаж, магнит, УЗИ и т.п.)
+    procedure_type: Mapped[str | None] = mapped_column(
+        String(MEDIUM_STRING_LENGTH), nullable=True, index=True
+    )
     dosage: Mapped[str | None] = mapped_column(String(255), nullable=True)  # Дозировка
     frequency: Mapped[str | None] = mapped_column(String(255), nullable=True)  # 2 раза в день
     duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Курс (дней)
@@ -795,7 +800,6 @@ class Assignment(Base, TimestampMixin):
         nullable=False,
         index=True,
     )
-
     record: Mapped[MedicalRecord] = relationship(back_populates="assignments")
     doctor: Mapped[User] = relationship()
     service: Mapped[Service | None] = relationship()
@@ -836,10 +840,20 @@ class ProcedureExecution(Base, TimestampMixin):
     assignment_id: Mapped[int] = mapped_column(
         ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # Кто фактически выполнил: медсестра ИЛИ врач (для врачебных манипуляций).
+    # Дублирует nurse_id для обратной совместимости, но семантически шире.
     nurse_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    performed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Когда фактически выполнено (для отчётов за период). Может отличаться
+    # от executed_at, если отметку внесли позже.
+    performed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     status: Mapped[ProcedureExecutionStatus] = mapped_column(
         Enum(ProcedureExecutionStatus, name="procedure_execution_status_enum", native_enum=False),
         default=ProcedureExecutionStatus.COMPLETED,
@@ -847,9 +861,15 @@ class ProcedureExecution(Base, TimestampMixin):
     )
     materials_used: Mapped[str | None] = mapped_column(Text, nullable=True)  # Расходники
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Ссылка на оплаченную позицию счёта (если клиника требует предоплату).
+    invoice_id: Mapped[int | None] = mapped_column(
+        ForeignKey("invoices.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     assignment: Mapped[Assignment] = relationship(back_populates="executions")
-    nurse: Mapped[User] = relationship()
+    nurse: Mapped[User] = relationship(foreign_keys=[nurse_id])
+    performed_by: Mapped[User | None] = relationship(foreign_keys=[performed_by_id])
+    invoice: Mapped["Invoice | None"] = relationship()
 
 
 class AnalysisResult(Base, TimestampMixin):
@@ -983,9 +1003,78 @@ class Payment(Base, TimestampMixin):
     cashier_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    # --- Сторно ---
+    # Если платёж является сторно-проводкой, здесь ссылка на исходный платёж.
+    # Оригинал никогда не удаляется и не меняется — только компенсируется.
+    reversal_of_id: Mapped[int | None] = mapped_column(
+        ForeignKey("payments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Причина сторно (обязательна для компенсирующей проводки)
+    reversal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     invoice: Mapped[Invoice] = relationship(back_populates="payments")
     cashier: Mapped[User] = relationship()
+    reversal_of: Mapped["Payment | None"] = relationship(remote_side=[id])
+
+
+class RefundRequest(Base, TimestampMixin):
+    """Заявка на возврат средств — двойной контроль денег.
+
+    Роль в системе:
+    Никто в одиночку не проводит полный цикл с деньгами:
+    - ресепшен/касса принимает оплату и создаёт заявку на возврат;
+    - бухгалтерия проверяет и подтверждает (или отклоняет) заявку;
+    - только после подтверждения создаётся сторно-проводка.
+
+    Поля:
+    - id: Идентификатор заявки.
+    - payment_id: Платёж, по которому просят возврат.
+    - invoice_id: Счёт (денормализация для быстрых выборок).
+    - requested_by_id: Кто создал заявку (ресепшен/касса).
+    - reviewed_by_id: Кто рассмотрел (бухгалтерия).
+    - amount: Сумма к возврату (может быть частичной).
+    - reason: Причина возврата (обязательна).
+    - status: PENDING → APPROVED / REJECTED / CANCELLED.
+    - review_comment: Комментарий бухгалтера при решении.
+    - reviewed_at: Когда рассмотрена.
+
+    Связи:
+    - payment: Исходный платёж.
+    - requested_by, reviewed_by: Участники процесса.
+    """
+
+    __tablename__ = "refund_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payment_id: Mapped[int] = mapped_column(
+        ForeignKey("payments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    invoice_id: Mapped[int] = mapped_column(
+        ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    requested_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    reviewed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[RefundRequestStatus] = mapped_column(
+        Enum(RefundRequestStatus, name="refund_request_status_enum", native_enum=False),
+        default=RefundRequestStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    payment: Mapped[Payment] = relationship(foreign_keys=[payment_id])
+    invoice: Mapped[Invoice] = relationship()
+    requested_by: Mapped[User] = relationship(foreign_keys=[requested_by_id])
+    reviewed_by: Mapped[User | None] = relationship(foreign_keys=[reviewed_by_id])
 
 
 class AuditLog(Base):

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import Field
 
-from app.models.enums import PaymentMethod, PaymentStatus
+from app.models.enums import PaymentMethod, PaymentStatus, RefundRequestStatus
 from app.schemas.common import ORMModel
 from app.schemas.users import UserResponse
 
@@ -61,7 +61,55 @@ class PaymentResponse(ORMModel):
     method: PaymentMethod
     cashier_id: int
     cashier: UserResponse | None = None
+    reversal_of_id: int | None = None
+    reversal_reason: str | None = None
     created_at: datetime
+
+
+# ═══════════════════════════════════════════════════════════════
+# Двойной контроль возвратов: заявка → подтверждение бухгалтерией
+# ═══════════════════════════════════════════════════════════════
+
+
+class RefundRequestCreate(ORMModel):
+    """Заявка на возврат (создаёт ресепшен/касса).
+
+    Деньги не двигаются: заявка ждёт решения бухгалтерии.
+    """
+
+    payment_id: int
+    amount: Decimal = Field(..., gt=0, description="Сумма к возврату (может быть частичной)")
+    reason: str = Field(..., min_length=5, max_length=500, description="Причина возврата")
+
+
+class RefundRequestReview(ORMModel):
+    """Решение бухгалтерии по заявке."""
+
+    approve: bool = Field(..., description="True — подтвердить, False — отклонить")
+    comment: str | None = Field(None, max_length=500, description="Комментарий бухгалтера")
+
+
+class RefundRequestResponse(ORMModel):
+    id: int
+    payment_id: int
+    invoice_id: int
+    requested_by_id: int
+    reviewed_by_id: int | None = None
+    amount: Decimal
+    reason: str
+    status: RefundRequestStatus
+    review_comment: str | None = None
+    reviewed_at: datetime | None = None
+    requested_by: UserResponse | None = None
+    reviewed_by: UserResponse | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReversalCreate(ORMModel):
+    """Сторно-проводка: компенсация платежа без изменения оригинала."""
+
+    reason: str = Field(..., min_length=5, max_length=500, description="Причина сторно")
 
 
 class InvoiceCreate(ORMModel):
