@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models.entities import Appointment, User
 from app.models.enums import AppointmentStatus, RoleEnum
 from app.repositories.appointment_repo import AppointmentRepository
+from app.repositories.billing_repo import BillingRepository
 from app.schemas.appointments import (
     AppointmentCreate,
     AppointmentResponse,
@@ -121,12 +122,17 @@ async def get_appointment(
     # Единое правило доступа: врач — свои, пациент — свой, ресепшен/админ — любой,
     # медсестра — приёмы клиники (ведёт поток пациентов).
     await ensure_appointment_access(current_user, appt.doctor_id, appt.patient_id)
-    return appt
+
+    # Врачу важно видеть, оплачен ли приём (чтобы не проводить процедуры в долг)
+    response = AppointmentResponse.model_validate(appt)
+    invoice = await BillingRepository(db).get_invoice_by_appointment(appt.id)
+    if invoice is not None:
+        response.payment_status = invoice.status
+    return response
 
 
 @router.patch(
-    "/{appointment_id}",
-    response_model=AppointmentResponse,
+    "/{appointment_id}",    response_model=AppointmentResponse,
     summary="Перенос приёма (ресепшен — любой, врач — только свой)",
 )
 async def update_appointment(
@@ -147,13 +153,21 @@ async def update_appointment(
     if current_user.has_role(RoleEnum.DOCTOR) and appt.doctor_id != current_user.id:
         raise PermissionDeniedError("Врач может переносить только свои приёмы")
 
+    # Пациент переносит только свой приём и не позднее чем за 24 часа
+    if current_user.has_role(RoleEnum.PATIENT):
+        if (
+            not current_user.patient_profile
+            or appt.patient_id != current_user.patient_profile.id
+        ):
+            raise PermissionDeniedError("Пациент может переносить только свой приём")
+        AppointmentService.ensure_patient_time_limit(appt)
+
     service = AppointmentService(db)
     return await service.update_appointment(appointment_id, data)
 
 
 @router.patch(
-    "/{appointment_id}/status",
-    response_model=AppointmentResponse,
+    "/{appointment_id}/status",    response_model=AppointmentResponse,
     summary="Изменить статус приёма (ресепшен/врач — по правам, медсестра — прибытие)",
 )
 async def update_status(

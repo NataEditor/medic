@@ -1,7 +1,8 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import PATIENT_CANCEL_LIMIT_HOURS
 from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.models.entities import Appointment, Invoice, Service
 from app.models.enums import AppointmentStatus, PaymentStatus
@@ -87,6 +88,23 @@ class AppointmentService:
 
         detailed = await self.appt_repo.get_detailed(created.id)
         return detailed or created
+
+    @staticmethod
+    def ensure_patient_time_limit(appt: Appointment) -> None:
+        """Пациент может перенести/отменить приём не позднее чем за 24 часа.
+
+        Защита клиники от «отмены за 5 минут», когда слот уже не перепродать.
+        Сотрудники (ресепшен, врач) этим лимитом не ограничены.
+        """
+        scheduled = appt.scheduled_at
+        if scheduled.tzinfo is None:
+            scheduled = scheduled.replace(tzinfo=UTC)
+        limit = datetime.now(UTC) + timedelta(hours=PATIENT_CANCEL_LIMIT_HOURS)
+        if scheduled < limit:
+            raise BusinessRuleError(
+                f"Перенести или отменить приём можно не позднее чем за "
+                f"{PATIENT_CANCEL_LIMIT_HOURS} ч. Обратитесь на ресепшен."
+            )
 
     async def update_appointment(self, appt_id: int, data: AppointmentUpdate) -> Appointment:
         appt = await self.appt_repo.get_by_id(appt_id)

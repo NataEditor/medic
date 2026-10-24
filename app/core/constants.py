@@ -11,6 +11,8 @@ DEFAULT_APPOINTMENT_DURATION_MINUTES: int = 30
 MIN_APPOINTMENT_DURATION_MINUTES: int = 20
 MAX_APPOINTMENT_DURATION_MINUTES: int = 240
 MAX_SCHEDULE_LOOKAHEAD_HOURS: int = 4
+# Пациент может перенести/отменить свой приём не позднее чем за N часов.
+PATIENT_CANCEL_LIMIT_HOURS: int = 24
 
 # ----- График работы врачей -----
 # Рабочий день по умолчанию: смена и обеденный перерыв (по шаблону дня недели).

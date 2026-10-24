@@ -7,7 +7,7 @@ from app.core.constants import (
     MAX_APPOINTMENT_DURATION_MINUTES,
     MIN_APPOINTMENT_DURATION_MINUTES,
 )
-from app.models.enums import AppointmentStatus
+from app.models.enums import AppointmentStatus, PaymentStatus
 from app.schemas.clinics import ClinicResponse
 from app.schemas.common import ORMModel
 from app.schemas.patients import PatientResponse
@@ -60,5 +60,8 @@ class AppointmentResponse(ORMModel):
     clinic: ClinicResponse | None = None
     patient: PatientResponse | None = None
     doctor: UserResponse | None = None
+    # Статус оплаты приёма — врачу нужно знать, оплачен ли приём,
+    # чтобы не проводить процедуры в долг.
+    payment_status: PaymentStatus | None = None
     created_at: datetime
     updated_at: datetime

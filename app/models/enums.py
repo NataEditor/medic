@@ -56,6 +56,21 @@ class PatientStatus(str, enum.Enum):
     ANONYMIZED = "anonymized"
 
 
+class PatientRelativeStatus(str, enum.Enum):
+    """Статус связи «пациент ↔ близкий» (двухступенчатая модель).
+
+    - PENDING: пациент заявил связь в ЛК. Можно записывать близкого на приём
+      и видеть его расписание, но НЕ медданные (ЭМК, анализы).
+    - CONFIRMED: ресепшен проверил документ при совместном визите.
+      Открывается просмотр медданных близкого.
+    - REJECTED: ресепшен отклонил заявку (нет подтверждающих документов).
+    """
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+
+
 class EncounterStatus(str, enum.Enum):
     """Жизненный цикл медицинского обращения (Encounter).
 

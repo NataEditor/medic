@@ -39,6 +39,7 @@ from app.models.enums import (
     AssignmentStatus,
     AssignmentType,
     EncounterStatus,
+    PatientRelativeStatus,
     PatientStatus,
     PaymentMethod,
     PaymentStatus,
@@ -462,6 +463,65 @@ class Patient(Base, TimestampMixin):
     def passport(self) -> str:
         """Паспорт в человекочитаемом виде: '1234 567890'."""
         return f"{self.passport_series} {self.passport_number}"
+
+
+class PatientRelative(Base, TimestampMixin):
+    """Связь «пациент ↔ близкий» для записи и просмотра данных.
+
+    Роль в системе:
+    Пациент в ЛК заявляет связь («хочу записывать ребёнка/маму»). Пока связь
+    в статусе PENDING, он может записывать близкого на приём и видеть его
+    расписание, но НЕ медданные. Ресепшен подтверждает связь при первом
+    совместном визите (документ) — открывается просмотр ЭМК и анализов.
+
+    Исключение: связь «родитель — несовершеннолетний ребёнок» подтверждается
+    сразу при создании карты ребёнка (заявка не нужна).
+
+    Поля:
+    - id: Идентификатор связи.
+    - patient_id: Кто заявляет связь (владелец ЛК).
+    - relative_id: Кем является близкий (карта пациента).
+    - relation: Кем приходится ('child', 'parent', 'spouse', 'other').
+    - status: PENDING → CONFIRMED / REJECTED.
+    - confirmed_by_id: Кто подтвердил (ресепшен).
+    - confirmed_at: Когда подтверждено.
+    - notes: Примечание (какой документ предъявлен).
+
+    Ограничения:
+    - UniqueConstraint(patient_id, relative_id): одна связь на пару.
+    """
+
+    __tablename__ = "patient_relatives"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(
+        ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    relative_id: Mapped[int] = mapped_column(
+        ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    relation: Mapped[str] = mapped_column(String(SHORT_STRING_LENGTH), nullable=False)
+    status: Mapped[PatientRelativeStatus] = mapped_column(
+        Enum(PatientRelativeStatus, name="patient_relative_status_enum", native_enum=False),
+        default=PatientRelativeStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+    confirmed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    patient: Mapped[Patient] = relationship(foreign_keys=[patient_id])
+    relative: Mapped[Patient] = relationship(foreign_keys=[relative_id])
+    confirmed_by: Mapped[User | None] = relationship(foreign_keys=[confirmed_by_id])
+
+    __table_args__ = (
+        UniqueConstraint("patient_id", "relative_id", name="uq_patient_relative_pair"),
+    )
 
 
 class MedicalRecord(Base, TimestampMixin):
