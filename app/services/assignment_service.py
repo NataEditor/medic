@@ -139,22 +139,52 @@ class AssignmentService:
 
     async def record_execution(
         self,
-        nurse: User,
+        performer: User,
         data: ProcedureExecutionCreate,
     ) -> ProcedureExecution:
-        """Медсестра отмечает факт выполнения процедуры/манипуляции.
+        """Отметка о выполнении процедуры: медсестра — своё, врач — своё.
+
+        Врач выполняет часть манипуляций лично (УЗИ, инъекции, блокады).
+        Бухгалтерии нужна третья цифра отчёта — «сколько процедур врач
+        выполнил сам», поэтому врач тоже ставит отметку.
+
+        Ограничение: нельзя «нарисовать» чужое выполнение.
+        - медсестра отмечает только свои выполнения;
+        - врач — только свои (где он назначил и выполнил сам);
+        - главврач/супер-админ — любые (контроль и исправление ошибок).
 
         Если клиника работает по предоплате (REQUIRE_PAYMENT_BEFORE_PROCEDURE),
         процедура выполняется только по оплаченному счёту.
         """
-        if not nurse.has_any_role(RoleEnum.NURSE, RoleEnum.HEAD_DOCTOR):
-            raise PermissionDeniedError("Отметку о выполнении может вносить только медсестра")
+        is_nurse = performer.has_role(RoleEnum.NURSE)
+        is_doctor = performer.has_role(RoleEnum.DOCTOR)
+        is_overseer = performer.has_any_role(RoleEnum.HEAD_DOCTOR, RoleEnum.SUPER_ADMIN)
+
+        if not (is_nurse or is_doctor or is_overseer):
+            raise PermissionDeniedError(
+                "Отметку о выполнении вносит медсестра или врач"
+            )
 
         assignment = await self.assignment_repo.get_by_id(data.assignment_id)
         if not assignment:
             raise NotFoundError("Назначение не найдено")
         if assignment.type != AssignmentType.PROCEDURE:
             raise BusinessRuleError("Отметку выполнения можно делать только для процедур")
+
+        # Защита от «рисования» чужого выполнения
+        if not is_overseer:
+            if is_doctor and not is_nurse:
+                # Врач отмечает только процедуры, которые назначил сам
+                if assignment.doctor_id != performer.id:
+                    raise PermissionDeniedError(
+                        "Врач может отмечать выполнение только своих назначений"
+                    )
+            elif is_nurse and not is_doctor:
+                # Медсестра не может отметить выполнение врачебной манипуляции
+                # как своё, если назначение ведёт врач и он сам её выполняет.
+                # Разрешаем: медсестра отмечает процедуры, назначенные врачом
+                # (это её штатная работа), но performed_by всегда = она сама.
+                pass
 
         # Проверка оплаты: процедура только по оплаченному счёту
         invoice_id: int | None = None
@@ -168,8 +198,10 @@ class AssignmentService:
 
         execution = ProcedureExecution(
             assignment_id=data.assignment_id,
-            nurse_id=nurse.id,
-            performed_by_id=nurse.id,
+            # nurse_id остаётся обязательным полем (историческая схема):
+            # для врача дублируем его id, семантика — «кто выполнил».
+            nurse_id=performer.id,
+            performed_by_id=performer.id,
             executed_at=data.executed_at,
             performed_at=data.executed_at,
             status=data.status,
@@ -193,7 +225,8 @@ class AssignmentService:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def record_analysis(        self,
+    async def record_analysis(
+        self,
         patient_id: int,
         worker: User | None,
         data: AnalysisResultCreate,

@@ -7,6 +7,7 @@ from app.api.deps import (
     ensure_medical_access,
     get_current_patient_user,
     is_medical_staff,
+    record_audit_log,
     require_roles,
 )
 from app.core.exceptions import NotFoundError, PermissionDeniedError
@@ -73,11 +74,21 @@ async def get_patient_record(
     record = await repo.get_medical_record(patient_id)
     if not record:
         raise NotFoundError("Медкарта не найдена")
+
+    # Аудит доступа к ПДн (152-ФЗ): фиксируем факт просмотра ЭМК
+    await record_audit_log(
+        db=db,
+        user=current_user,
+        action="view_medical_record",
+        entity_name="medical_record",
+        entity_id=record.id,
+        changes=f'{{"patient_id": {patient_id}}}',
+    )
     return record
 
 
-@router.post(    "/{record_id}/entries",
-    response_model=MedicalRecordEntryResponse,
+@router.post(
+    "/{record_id}/entries",    response_model=MedicalRecordEntryResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Внести запись в медкарту по итогам приёма (только врач)",
 )

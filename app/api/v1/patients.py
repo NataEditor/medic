@@ -5,7 +5,12 @@ from fastapi import APIRouter, Body, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_patient_creator, require_roles
+from app.api.deps import (
+    get_current_user,
+    record_audit_log,
+    require_patient_creator,
+    require_roles,
+)
 from app.core.constants import (
     ALLOWED_PASSPORT_SCAN_EXTENSIONS,
     DEFAULT_PAGE,
@@ -168,7 +173,7 @@ async def upload_passport_scan(
 async def get_passport_scan(
     patient_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[
+    current_user: Annotated[
         User,
         Depends(
             require_roles(
@@ -182,12 +187,21 @@ async def get_passport_scan(
     """Скан отдаётся только через API из закрытого хранилища — по ролям и с аудитом."""
     service = PatientService(db)
     scan_path = await service.get_passport_scan(patient_id)
+
+    # Аудит доступа к ПДн (152-ФЗ): фиксируем, кто открыл скан паспорта
+    await record_audit_log(
+        db=db,
+        user=current_user,
+        action="view_passport_scan",
+        entity_name="patient",
+        entity_id=patient_id,
+    )
+
     return FileResponse(
         path=scan_path,
         media_type=PASSPORT_SCAN_MEDIA_TYPE,
         filename=f"passport_{patient_id}.jpg",
     )
-
 
 @router.get(
     "/{patient_id}",

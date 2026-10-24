@@ -135,12 +135,20 @@ async def delete_assignment(
     "/executions",
     response_model=ProcedureExecutionResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Отметка о выполнении процедуры (только медсестра)",
+    summary="Отметка о выполнении процедуры (медсестра — своё, врач — своё)",
 )
 async def record_execution(
     data: ProcedureExecutionCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_roles(RoleEnum.NURSE))],
+    current_user: Annotated[
+        User,
+        Depends(require_roles(RoleEnum.NURSE, RoleEnum.DOCTOR)),
+    ],
 ) -> ProcedureExecution:
+    """Врач отмечает процедуры, выполненные им лично (УЗИ, инъекции, блокады).
+
+    Это нужно бухгалтерии для третьей цифры отчёта — «сколько процедур
+    врач выполнил сам». Отметить чужое выполнение нельзя.
+    """
     service = AssignmentService(db)
     return await service.record_execution(current_user, data)

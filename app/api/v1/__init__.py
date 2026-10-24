@@ -10,6 +10,7 @@ from app.api.v1.encounters import router as encounters_router
 from app.api.v1.medical_records import router as medical_records_router
 from app.api.v1.patients import router as patients_router
 from app.api.v1.relatives import router as relatives_router
+from app.api.v1.reports import router as reports_router
 from app.api.v1.schedules import router as schedules_router
 from app.api.v1.users import router as users_router
 
@@ -27,3 +28,4 @@ api_v1_router.include_router(encounters_router)
 api_v1_router.include_router(assignments_router)
 api_v1_router.include_router(analyses_router)
 api_v1_router.include_router(billing_router)
+api_v1_router.include_router(reports_router)
