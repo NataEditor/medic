@@ -38,6 +38,8 @@ from app.models.enums import (
     AppointmentStatus,
     AssignmentStatus,
     AssignmentType,
+    EncounterStatus,
+    PatientStatus,
     PaymentMethod,
     PaymentStatus,
     ProcedureExecutionStatus,
@@ -405,6 +407,27 @@ class Patient(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # --- Жизненный цикл карты ---
+    # draft: создана онлайн-записью, паспорт ещё не сверен.
+    # active: ресепшен сверил паспорт, ЭМК работает.
+    # archived: карта закрыта, новые приёмы не создаются.
+    # anonymized: ПДн скрыты (152-ФЗ), медзаписи сохранены.
+    status: Mapped[PatientStatus] = mapped_column(
+        Enum(PatientStatus, name="patient_status_enum", native_enum=False),
+        default=PatientStatus.ACTIVE,
+        nullable=False,
+        index=True,
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    anonymized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     birth_date: Mapped[date] = mapped_column(Date, nullable=False)
     gender: Mapped[str] = mapped_column(String(10), nullable=False)  # "M" / "F"
     # Телефон нужен для SMS-напоминаний, но уникальность пациента не определяет
@@ -520,15 +543,94 @@ class MedicalRecordEntry(Base, TimestampMixin):
     appointment_id: Mapped[int | None] = mapped_column(
         ForeignKey("appointments.id", ondelete="SET NULL"), nullable=True
     )
+    # Обращение, в рамках которого сделана запись (основная связь по ТЗ).
+    encounter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("encounters.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     complaints: Mapped[str] = mapped_column(Text, nullable=False)  # Жалобы
     anamnesis: Mapped[str | None] = mapped_column(Text, nullable=True)  # Анамнез
     objective_status: Mapped[str | None] = mapped_column(Text, nullable=True)  # Объективный статус
     diagnosis_icd10: Mapped[str] = mapped_column(String(20), nullable=False)  # Код МКБ-10
     diagnosis_text: Mapped[str] = mapped_column(Text, nullable=False)  # Развёрнутый диагноз
     treatment_plan: Mapped[str | None] = mapped_column(Text, nullable=True)  # План лечения
+    # Корректирующая запись: ссылка на исходную, если это исправление после закрытия.
+    corrects_entry_id: Mapped[int | None] = mapped_column(
+        ForeignKey("medical_record_entries.id", ondelete="SET NULL"), nullable=True
+    )
 
     record: Mapped[MedicalRecord] = relationship(back_populates="entries")
     doctor: Mapped[User] = relationship()
+    encounter: Mapped["Encounter | None"] = relationship(back_populates="entries")
+
+
+class Encounter(Base, TimestampMixin):
+    """Медицинское обращение (Encounter) — событие «пациент пришёл, его приняли».
+
+    Роль в системе:
+    Отдельная сущность от Appointment (слот в расписании), как в стандарте FHIR.
+    Appointment — это бронь времени. Encounter — факт медицинского приёма,
+    внутри которого врач документирует осмотр, ставит диагноз и создаёт назначения.
+
+    Правило связи: один Appointment порождает ноль или один Encounter.
+    Не пришёл — слот отменён, обращения нет. Это честно видно в истории:
+    «отменён» и «принят» — разные вещи.
+
+    Поля:
+    - id: Идентификатор обращения.
+    - appointment_id: Слот, из которого открыто обращение (1-к-1, SET NULL).
+    - patient_id: Пациент (денормализация для быстрых выборок).
+    - doctor_id: Врач, ведущий обращение.
+    - clinic_id: Клиника, где состоялся приём.
+    - record_id: Медкарта пациента.
+    - status: OPEN → CLOSED / CANCELLED.
+    - opened_at: Время открытия обращения (начало приёма).
+    - closed_at: Время закрытия (окончание приёма).
+    - chief_complaint: Краткая причина обращения (одной строкой).
+
+    Связи:
+    - appointment: Слот расписания, породивший обращение.
+    - entries: Клинические записи в рамках обращения.
+    """
+
+    __tablename__ = "encounters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    appointment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("appointments.id", ondelete="SET NULL"), unique=True, nullable=True
+    )
+    patient_id: Mapped[int] = mapped_column(
+        ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    doctor_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    clinic_id: Mapped[int] = mapped_column(
+        ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    record_id: Mapped[int] = mapped_column(
+        ForeignKey("medical_records.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[EncounterStatus] = mapped_column(
+        Enum(EncounterStatus, name="encounter_status_enum", native_enum=False),
+        default=EncounterStatus.OPEN,
+        nullable=False,
+        index=True,
+    )
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    chief_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    appointment: Mapped["Appointment | None"] = relationship(back_populates="encounter")
+    patient: Mapped[Patient] = relationship()
+    doctor: Mapped[User] = relationship()
+    clinic: Mapped[Clinic] = relationship()
+    record: Mapped[MedicalRecord] = relationship()
+    entries: Mapped[list["MedicalRecordEntry"]] = relationship(
+        back_populates="encounter",
+        primaryjoin="Encounter.id == MedicalRecordEntry.encounter_id",
+    )
 
 
 class Service(Base, TimestampMixin):
@@ -628,6 +730,10 @@ class Appointment(Base, TimestampMixin):
     doctor: Mapped[User] = relationship(foreign_keys=[doctor_id])
     service: Mapped[Service | None] = relationship()
     invoice: Mapped["Invoice | None"] = relationship(back_populates="appointment", uselist=False)
+    # Обращение, открытое из этого слота (0 или 1). Не пришёл — обращения нет.
+    encounter: Mapped["Encounter | None"] = relationship(
+        back_populates="appointment", uselist=False
+    )
 
     __table_args__ = (Index("ix_appointments_doctor_schedule", "doctor_id", "scheduled_at"),)
 

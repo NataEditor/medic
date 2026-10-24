@@ -20,6 +20,7 @@ from app.models.enums import RoleEnum
 from app.repositories.patient_repo import PatientRepository
 from app.schemas.auth import PatientAccessResponse
 from app.schemas.common import PaginatedResponse
+from app.schemas.encounters import PatientStatusChange
 from app.schemas.patients import (
     PatientCreate,
     PatientPassportScanResponse,
@@ -247,3 +248,55 @@ async def get_my_patient_card(
     if not patient:
         raise NotFoundError("Ваша карточка не найдена")
     return patient
+
+
+# ═══════════════════════════════════════════════════════════════
+# Жизненный цикл карты: активация, архивация, обезличивание
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.post(
+    "/{patient_id}/activate",
+    response_model=PatientResponse,
+    summary="Активировать черновик карты (ресепшен сверил паспорт)",
+)
+async def activate_patient(
+    patient_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_patient_creator())],
+) -> Patient:
+    """Активация черновика: создаётся ЭМК, карта становится рабочей."""
+    service = PatientService(db)
+    return await service.activate_patient(patient_id)
+
+
+@router.post(
+    "/{patient_id}/archive",
+    response_model=PatientResponse,
+    summary="Архивировать карту (главврач или супер-админ)",
+)
+async def archive_patient(
+    patient_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_roles(RoleEnum.HEAD_DOCTOR))],
+    data: PatientStatusChange | None = None,
+) -> Patient:
+    """Архивация: новые приёмы не создаются, записи сохраняются."""
+    service = PatientService(db)
+    return await service.archive_patient(patient_id, data.reason if data else None)
+
+
+@router.post(
+    "/{patient_id}/anonymize",
+    response_model=PatientResponse,
+    summary="Обезличить карту (152-ФЗ: ПДн скрыты, медзаписи сохранены)",
+)
+async def anonymize_patient(
+    patient_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_roles(RoleEnum.HEAD_DOCTOR))],
+    data: PatientStatusChange | None = None,
+) -> Patient:
+    """Обезличивание ≠ удаление: карту невозможно связать с человеком."""
+    service = PatientService(db)
+    return await service.anonymize_patient(patient_id, data.reason if data else None)

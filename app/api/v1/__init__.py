@@ -6,6 +6,7 @@ from app.api.v1.assignments import router as assignments_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
 from app.api.v1.clinics import router as clinics_router
+from app.api.v1.encounters import router as encounters_router
 from app.api.v1.medical_records import router as medical_records_router
 from app.api.v1.patients import router as patients_router
 from app.api.v1.schedules import router as schedules_router
@@ -20,6 +21,7 @@ api_v1_router.include_router(patients_router)
 api_v1_router.include_router(schedules_router)
 api_v1_router.include_router(appointments_router)
 api_v1_router.include_router(medical_records_router)
+api_v1_router.include_router(encounters_router)
 api_v1_router.include_router(assignments_router)
 api_v1_router.include_router(analyses_router)
 api_v1_router.include_router(billing_router)

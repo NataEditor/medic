@@ -13,7 +13,7 @@ from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError,
 from app.core.security import hash_password
 from app.core.utils import format_medical_record_number, generate_temp_password, utcnow
 from app.models.entities import MedicalRecord, Patient, User
-from app.models.enums import RoleEnum
+from app.models.enums import PatientStatus, RoleEnum
 from app.repositories.patient_repo import PatientRepository
 from app.repositories.user_repo import UserRepository
 from app.schemas.patients import PatientCreate, PatientUpdate
@@ -202,3 +202,146 @@ class PatientService:
         send_temp_password_sms.delay(phone, temp_password, TEMP_PASSWORD_TTL_HOURS)
 
         return temp_password, user
+
+    # ═══════════════════════════════════════════════════════════════
+    # Жизненный цикл карты: draft → active → archived / anonymized
+    # ═══════════════════════════════════════════════════════════════
+
+    async def create_draft_patient(self, data: PatientCreate) -> Patient:
+        """Черновик карты при онлайн-записи (паспорт ещё не сверен).
+
+        ЭМК не создаётся: до активации ресепшеном пациент не может
+        получать медицинскую помощь — только записаться.
+        """
+        existing = await self.patient_repo.get_by_passport(
+            data.passport_series, data.passport_number
+        )
+        if existing:
+            raise ConflictError(
+                f"Пациент с паспортом {data.passport_series} {data.passport_number} "
+                f"уже зарегистрирован (карта {existing.id})"
+            )
+
+        patient = Patient(
+            first_name=data.first_name.strip(),
+            last_name=data.last_name.strip(),
+            middle_name=data.middle_name.strip() if data.middle_name else None,
+            passport_series=data.passport_series,
+            passport_number=data.passport_number,
+            birth_date=data.birth_date,
+            gender=data.gender,
+            phone=data.phone.strip() if data.phone else None,
+            email=data.email.lower().strip() if data.email else None,
+            status=PatientStatus.DRAFT,
+        )
+        return await self.patient_repo.create(patient)
+
+    async def activate_patient(self, patient_id: int) -> Patient:
+        """Активация черновика: ресепшен сверил паспорт при первом визите.
+
+        Создаётся ЭМК, карта становится полностью рабочей.
+        """
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if patient is None:
+            raise NotFoundError("Пациент не найден")
+        if patient.status == PatientStatus.ACTIVE:
+            raise BusinessRuleError("Карта уже активна")
+        if patient.status in (PatientStatus.ARCHIVED, PatientStatus.ANONYMIZED):
+            raise BusinessRuleError(
+                f"Нельзя активировать карту в статусе '{patient.status.value}'"
+            )
+
+        patient.status = PatientStatus.ACTIVE
+        patient.activated_at = utcnow()
+
+        # Создаём ЭМК, если её ещё нет
+        record = await self.patient_repo.get_medical_record(patient_id)
+        if record is None:
+            record_number = format_medical_record_number(patient.id)
+            self.session.add(
+                MedicalRecord(patient_id=patient.id, record_number=record_number)
+            )
+
+        await self.session.flush()
+        await self.session.refresh(patient)
+        return patient
+
+    async def archive_patient(self, patient_id: int, reason: str | None = None) -> Patient:
+        """Архивация карты: новые приёмы не создаются, записи сохраняются."""
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if patient is None:
+            raise NotFoundError("Пациент не найден")
+        if patient.status == PatientStatus.ARCHIVED:
+            raise BusinessRuleError("Карта уже в архиве")
+        if patient.status == PatientStatus.ANONYMIZED:
+            raise BusinessRuleError("Обезличенную карту нельзя архивировать")
+
+        patient.status = PatientStatus.ARCHIVED
+        patient.archived_at = utcnow()
+
+        from app.api.deps import record_audit_log
+
+        await record_audit_log(
+            db=self.session,
+            user=None,
+            action="archive_patient",
+            entity_name="patient",
+            entity_id=patient.id,
+            changes=f'{{"reason": "{reason or ""}"}}',
+        )
+
+        await self.session.flush()
+        await self.session.refresh(patient)
+        return patient
+
+    async def anonymize_patient(self, patient_id: int, reason: str | None = None) -> Patient:
+        """Обезличивание карты (152-ФЗ): ПДн скрыты, медзаписи сохранены.
+
+        Обезличивание ≠ удаление: медицинские записи хранятся по срокам
+        Минздрава, но карту невозможно связать с конкретным человеком.
+        """
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if patient is None:
+            raise NotFoundError("Пациент не найден")
+        if patient.status == PatientStatus.ANONYMIZED:
+            raise BusinessRuleError("Карта уже обезличена")
+
+        # Маскируем персональные данные, сохраняя структуру записи
+        patient.last_name = "Обезличен"
+        patient.first_name = f"Пациент-{patient.id}"
+        patient.middle_name = None
+        patient.passport_series = "0000"
+        patient.passport_number = f"{patient.id:06d}"
+        patient.phone = None
+        patient.email = None
+        patient.snils = None
+        patient.oms_number = None
+        patient.address = None
+        patient.passport_scan_path = None
+        patient.passport_scan_uploaded_at = None
+
+        patient.status = PatientStatus.ANONYMIZED
+        patient.anonymized_at = utcnow()
+
+        # Отвязываем учётную запись ЛК и блокируем её
+        if patient.user_id is not None:
+            user = await self.user_repo.get_by_id(patient.user_id)
+            if user is not None:
+                user.is_active = False
+                user.email = f"anonymized_{patient.id}@invalid.local"
+                user.phone = f"+7000000{patient.id:04d}"
+
+        from app.api.deps import record_audit_log
+
+        await record_audit_log(
+            db=self.session,
+            user=None,
+            action="anonymize_patient",
+            entity_name="patient",
+            entity_id=patient.id,
+            changes=f'{{"reason": "{reason or ""}"}}',
+        )
+
+        await self.session.flush()
+        await self.session.refresh(patient)
+        return patient
