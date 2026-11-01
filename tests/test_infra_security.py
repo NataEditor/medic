@@ -62,5 +62,62 @@ class TestCorsHeadersApplied(unittest.TestCase):
             self.assertTrue(live_settings.cors_allow_credentials)
 
 
+class TestProductionSecretValidation(unittest.TestCase):
+    """В production приложение не стартует с небезопасными секретами."""
+
+    _STRONG_KEY = "x" * 48
+
+    def test_dev_allows_defaults(self) -> None:
+        """В development дефолты допустимы (удобство запуска)."""
+        s = Settings(app_env="development")
+        self.assertFalse(s.is_production)
+
+    def test_prod_rejects_default_secret_key(self) -> None:
+        with self.assertRaises(ValueError):
+            Settings(
+                app_env="production",
+                secret_key="change-me-to-a-very-secret-32-byte-key-medic-mis",
+                bootstrap_admin_on_startup=False,
+                debug=False,
+            )
+
+    def test_prod_rejects_short_secret_key(self) -> None:
+        with self.assertRaises(ValueError):
+            Settings(
+                app_env="production",
+                secret_key="short",
+                bootstrap_admin_on_startup=False,
+                debug=False,
+            )
+
+    def test_prod_rejects_default_bootstrap_password(self) -> None:
+        with self.assertRaises(ValueError):
+            Settings(
+                app_env="production",
+                secret_key=self._STRONG_KEY,
+                bootstrap_admin_on_startup=True,
+                bootstrap_admin_password="Admin12345",
+                debug=False,
+            )
+
+    def test_prod_rejects_debug(self) -> None:
+        with self.assertRaises(ValueError):
+            Settings(
+                app_env="production",
+                secret_key=self._STRONG_KEY,
+                bootstrap_admin_on_startup=False,
+                debug=True,
+            )
+
+    def test_prod_accepts_secure_config(self) -> None:
+        s = Settings(
+            app_env="production",
+            secret_key=self._STRONG_KEY,
+            bootstrap_admin_on_startup=False,
+            debug=False,
+        )
+        self.assertTrue(s.is_production)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -197,3 +197,31 @@ await ensure_medical_access(db, current_user, patient_id)  # уровень 2
   персонала своей клиники (кроме SA); пациент видит лишь свободные слоты.
 * **Загрузка анализа** (`/analyses/upload`) — только по назначению, выданному
   в клинике сотрудника.
+
+---
+
+## 🔒 Безопасность конфигурации (production)
+
+При `APP_ENV=production` приложение **не стартует** с небезопасной конфигурацией —
+срабатывает валидатор `Settings._validate_production_secrets`:
+
+| Проверка | Условие отказа |
+|---|---|
+| `SECRET_KEY` | значение по умолчанию или короче 32 байт (RFC 7518 для HS256) |
+| `BOOTSTRAP_ADMIN_PASSWORD` | дефолтный `Admin12345` при `BOOTSTRAP_ADMIN_ON_STARTUP=true` |
+| `DEBUG` | `true` (утечка деталей ошибок) |
+
+Сгенерировать надёжный ключ:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+В `development`/`test` дефолты допустимы — для удобства локального запуска.
+
+### Миграции БД
+
+```bash
+# Применить все миграции (в Docker-сети хост = postgres, локально = localhost)
+alembic upgrade head
+```

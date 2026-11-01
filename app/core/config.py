@@ -1,7 +1,15 @@
 from functools import lru_cache
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Значения по умолчанию, недопустимые в production (защита от деплоя «как есть»).
+_INSECURE_SECRET_KEY = "change-me-to-a-very-secret-32-byte-key-medic-mis"
+_INSECURE_BOOTSTRAP_PASSWORD = "Admin12345"
+# Минимальная длина секретного ключа (RFC 7518 для HS256).
+_MIN_SECRET_KEY_BYTES = 32
+# Окружения, считающиеся production.
+_PRODUCTION_ENVS = frozenset({"production", "prod"})
 
 
 class Settings(BaseSettings):
@@ -20,7 +28,7 @@ class Settings(BaseSettings):
     # Отдельный флаг для логирования SQL-запросов (не завязан на DEBUG).
     sql_echo: bool = False
 
-    secret_key: str = "change-me-to-a-very-secret-32-byte-key-medic-mis"
+    secret_key: str = _INSECURE_SECRET_KEY
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 14
@@ -65,12 +73,58 @@ class Settings(BaseSettings):
     # Если в базе нет ни одного администратора, он создаётся при старте из этих значений.
     # Задаются через .env: BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD и т.д.
     bootstrap_admin_email: str = "admin@medic.local"
-    bootstrap_admin_password: str = "Admin12345"
+    bootstrap_admin_password: str = _INSECURE_BOOTSTRAP_PASSWORD
     bootstrap_admin_phone: str = "+70000000000"
     bootstrap_admin_first_name: str = "Super"
     bootstrap_admin_last_name: str = "Admin"
     # Автосоздание админа при старте приложения (в prod ставьте false и создавайте через CLI)
     bootstrap_admin_on_startup: bool = True
+
+    @property
+    def is_production(self) -> bool:
+        """True, если приложение запущено в production-окружении."""
+        return self.app_env.strip().lower() in _PRODUCTION_ENVS
+
+    @model_validator(mode="after")
+    def _validate_production_secrets(self) -> "Settings":
+        """Запрещает небезопасные секреты в production.
+
+        В dev/test дефолты допустимы (удобство запуска), но в prod
+        приложение не должно стартовать с ключом-заглушкой или слабым
+        паролем bootstrap-админа — это прямой риск компрометации.
+        """
+        if not self.is_production:
+            return self
+
+        errors: list[str] = []
+
+        if self.secret_key == _INSECURE_SECRET_KEY:
+            errors.append(
+                "SECRET_KEY не изменён (используется значение по умолчанию). "
+                'Задайте уникальный ключ: python -c "import secrets; '
+                'print(secrets.token_urlsafe(48))"'
+            )
+        elif len(self.secret_key.encode("utf-8")) < _MIN_SECRET_KEY_BYTES:
+            errors.append(
+                f"SECRET_KEY короче {_MIN_SECRET_KEY_BYTES} байт — "
+                "недостаточно для HS256 (RFC 7518)."
+            )
+
+        if (
+            self.bootstrap_admin_on_startup
+            and self.bootstrap_admin_password == _INSECURE_BOOTSTRAP_PASSWORD
+        ):
+            errors.append(
+                "BOOTSTRAP_ADMIN_PASSWORD не изменён. Задайте надёжный пароль "
+                "или отключите BOOTSTRAP_ADMIN_ON_STARTUP и создайте админа через CLI."
+            )
+
+        if self.debug:
+            errors.append("DEBUG=true недопустим в production (утечка деталей ошибок).")
+
+        if errors:
+            raise ValueError("Небезопасная конфигурация для production:\n- " + "\n- ".join(errors))
+        return self
 
     @computed_field  # type: ignore[prop-decorator]
     @property
