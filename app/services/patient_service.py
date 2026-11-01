@@ -10,13 +10,14 @@ from app.core.constants import (
     TEMP_PASSWORD_TTL_HOURS,
 )
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError, ValidationError
+from app.core.logging import logger
 from app.core.security import hash_password
 from app.core.utils import format_medical_record_number, generate_temp_password, utcnow
 from app.models.entities import MedicalRecord, Patient, User
 from app.models.enums import PatientStatus, RoleEnum
 from app.repositories.patient_repo import PatientRepository
 from app.repositories.user_repo import UserRepository
-from app.schemas.patients import PatientCreate, PatientUpdate
+from app.schemas.patients import PatientContactUpdate, PatientCreate, PatientUpdate
 
 
 class PatientService:
@@ -25,12 +26,20 @@ class PatientService:
         self.patient_repo = PatientRepository(session)
         self.user_repo = UserRepository(session)
 
-    async def create_patient_with_record(self, data: PatientCreate) -> Patient:
+    async def create_patient_with_record(
+        self,
+        data: PatientCreate,
+        *,
+        created_by_clinic_id: int | None = None,
+    ) -> Patient:
         """Ресепшен регистрирует пациента по паспорту — сразу открывается ЭМК.
 
         Уникальность определяется парой серия+номер паспорта, а не телефоном:
         один и тот же номер телефона может принадлежать разным людям
         (например, родственникам).
+
+        created_by_clinic_id — клиника сотрудника, заводившего карту. Нужна
+        для админ-операций над картой до появления первого приёма.
         """
         existing = await self.patient_repo.get_by_passport(
             data.passport_series, data.passport_number
@@ -54,9 +63,9 @@ class PatientService:
             snils=data.snils.strip() if data.snils else None,
             oms_number=data.oms_number.strip() if data.oms_number else None,
             address=data.address.strip() if data.address else None,
+            created_by_clinic_id=created_by_clinic_id,
         )
         created_patient = await self.patient_repo.create(patient)
-
         # Автоматическая генерация номера ЭМК по единому формату
         record_number = format_medical_record_number(created_patient.id)
 
@@ -67,6 +76,13 @@ class PatientService:
         self.session.add(medical_record)
         await self.session.flush()
 
+        logger.info(
+            "Создана карта пациента: id={} ФИО='{} {}' ЭМК={}",
+            created_patient.id,
+            created_patient.last_name,
+            created_patient.first_name,
+            record_number,
+        )
         return created_patient
 
     async def update_patient(self, patient_id: int, data: PatientUpdate) -> Patient:
@@ -91,6 +107,36 @@ class PatientService:
 
         await self.session.flush()
         await self.session.refresh(patient)
+        logger.info(
+            "Обновлён профиль пациента id={} (поля: {})",
+            patient.id,
+            ", ".join(update_dict.keys()) or "нет",
+        )
+        return patient
+
+    async def update_own_contacts(self, patient_id: int, data: PatientContactUpdate) -> Patient:
+        """Пациент правит только свои контактные данные (телефон, email, адрес).
+
+        Паспорт, ФИО и дата рождения не меняются: это документы, которые
+        правит регистратура по предъявлении паспорта (152-ФЗ).
+        """
+        patient = await self.patient_repo.get_by_id(patient_id)
+        if not patient:
+            raise NotFoundError("Пациент не найден")
+
+        update_dict = data.model_dump(exclude_unset=True)
+        for key, val in update_dict.items():
+            if isinstance(val, str):
+                val = val.strip()
+            setattr(patient, key, val)
+
+        await self.session.flush()
+        await self.session.refresh(patient)
+        logger.info(
+            "Пациент id={} обновил свои контакты (поля: {})",
+            patient.id,
+            ", ".join(update_dict.keys()) or "нет",
+        )
         return patient
 
     async def get_patient_card(self, patient_id: int) -> MedicalRecord:
@@ -207,7 +253,12 @@ class PatientService:
     # Жизненный цикл карты: draft → active → archived / anonymized
     # ═══════════════════════════════════════════════════════════════
 
-    async def create_draft_patient(self, data: PatientCreate) -> Patient:
+    async def create_draft_patient(
+        self,
+        data: PatientCreate,
+        *,
+        created_by_clinic_id: int | None = None,
+    ) -> Patient:
         """Черновик карты при онлайн-записи (паспорт ещё не сверен).
 
         ЭМК не создаётся: до активации ресепшеном пациент не может
@@ -233,6 +284,7 @@ class PatientService:
             phone=data.phone.strip() if data.phone else None,
             email=data.email.lower().strip() if data.email else None,
             status=PatientStatus.DRAFT,
+            created_by_clinic_id=created_by_clinic_id,
         )
         return await self.patient_repo.create(patient)
 
@@ -247,9 +299,7 @@ class PatientService:
         if patient.status == PatientStatus.ACTIVE:
             raise BusinessRuleError("Карта уже активна")
         if patient.status in (PatientStatus.ARCHIVED, PatientStatus.ANONYMIZED):
-            raise BusinessRuleError(
-                f"Нельзя активировать карту в статусе '{patient.status.value}'"
-            )
+            raise BusinessRuleError(f"Нельзя активировать карту в статусе '{patient.status.value}'")
 
         patient.status = PatientStatus.ACTIVE
         patient.activated_at = utcnow()
@@ -258,9 +308,7 @@ class PatientService:
         record = await self.patient_repo.get_medical_record(patient_id)
         if record is None:
             record_number = format_medical_record_number(patient.id)
-            self.session.add(
-                MedicalRecord(patient_id=patient.id, record_number=record_number)
-            )
+            self.session.add(MedicalRecord(patient_id=patient.id, record_number=record_number))
 
         await self.session.flush()
         await self.session.refresh(patient)

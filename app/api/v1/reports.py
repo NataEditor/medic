@@ -8,7 +8,7 @@ from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
 from app.models.entities import User
 from app.models.enums import RoleEnum
-from app.schemas.reports import DoctorProductivityReport
+from app.schemas.reports import DoctorProductivityReport, SalaryReport
 from app.services.report_service import ReportService
 
 router = APIRouter(prefix="/reports", tags=["Отчёты"])
@@ -47,7 +47,6 @@ async def doctors_summary(
             require_roles(
                 RoleEnum.ACCOUNTANT,
                 RoleEnum.HEAD_DOCTOR,
-                RoleEnum.CLINIC_ADMIN,
             )
         ),
     ],
@@ -58,6 +57,30 @@ async def doctors_summary(
     """Бухгалтерия видит всю сеть, главврач/админ — только свою клинику."""
     service = ReportService(db)
     return await service.doctors_summary(current_user, from_date, to_date, clinic_id)
+
+
+@router.get(
+    "/salaries",
+    response_model=SalaryReport,
+    summary="Ведомость зарплат врачей за период (бухгалтерия, SA)",
+)
+async def salaries(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[
+        User,
+        Depends(require_roles(RoleEnum.ACCOUNTANT, RoleEnum.SUPER_ADMIN)),
+    ],
+    from_date: date = Query(..., alias="from", description="Начало периода"),
+    to_date: date = Query(..., alias="to", description="Конец периода"),
+    clinic_id: int | None = Query(None, description="Фильтр по клинике"),
+) -> SalaryReport:
+    """Зарплата = процент от приёмов + процент от процедур.
+
+    Ставки берутся из профиля врача, поэтому бухгалтерия меняет их
+    без правки кода. Главврач ведомость не видит: это финансовая зона.
+    """
+    service = ReportService(db)
+    return await service.salaries(current_user, from_date, to_date, clinic_id)
 
 
 @router.get(

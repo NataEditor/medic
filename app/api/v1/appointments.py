@@ -23,6 +23,7 @@ from app.schemas.appointments import (
 )
 from app.schemas.common import PaginatedResponse
 from app.services.appointment_service import AppointmentService
+from app.services.relative_service import RelativeService
 
 router = APIRouter(prefix="/appointments", tags=["Приёмы и расписание"])
 
@@ -43,11 +44,18 @@ async def create_appointment(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> Appointment:
-    # Пациент может записать только себя
-    if current_user.has_role(RoleEnum.PATIENT) and (
-        not current_user.patient_profile or current_user.patient_profile.id != data.patient_id
-    ):
-        raise PermissionDeniedError("Пациент может записать только себя")
+    """Запись на приём.
+
+    Пациент записывает себя или близкого (PatientRelative). В статусе
+    pending связь уже позволяет записать, но медданные близкого закрыты
+    до подтверждения ресепшеном.
+    """
+    if current_user.has_role(RoleEnum.PATIENT):
+        relative_service = RelativeService(db)
+        if not await relative_service.can_book_for(current_user, data.patient_id):
+            raise PermissionDeniedError(
+                "Пациент может записать только себя или подтверждённого близкого"
+            )
     service = AppointmentService(db)
     return await service.create_appointment(data)
 
@@ -71,7 +79,7 @@ async def list_appointments(
 ) -> PaginatedResponse[AppointmentResponse]:
     repo = AppointmentRepository(db)
 
-    # Ролевые ограничения фильтрации
+    # Ролевые ограничения области видимости приёмов.
     if current_user.has_role(RoleEnum.PATIENT):
         # Пациент видит строго только свои приёмы
         if not current_user.patient_profile:
@@ -82,8 +90,20 @@ async def list_appointments(
     elif current_user.has_role(RoleEnum.DOCTOR):
         # Врач по умолчанию видит свои приёмы
         doctor_id = current_user.id
-    elif current_user.has_any_role(RoleEnum.RECEPTIONIST, RoleEnum.NURSE, RoleEnum.ACCOUNTANT):
-        clinic_id = clinic_id or current_user.clinic_id
+    elif current_user.has_role(RoleEnum.SUPER_ADMIN):
+        # Супер-админ видит всю сеть (clinic_id — опциональный фильтр)
+        pass
+    elif current_user.has_any_role(
+        RoleEnum.RECEPTIONIST,
+        RoleEnum.NURSE,
+        RoleEnum.CLINIC_ADMIN,
+        RoleEnum.HEAD_DOCTOR,
+    ):
+        # Персонал клиники видит только приёмы своего филиала
+        clinic_id = current_user.clinic_id
+    else:
+        # Бухгалтерия приёмы не видит: это медицинские данные, не финансы
+        raise PermissionDeniedError("Просмотр приёмов недоступен для вашей роли")
 
     items, total = await repo.filter_appointments(
         clinic_id=clinic_id,
@@ -132,8 +152,9 @@ async def get_appointment(
 
 
 @router.patch(
-    "/{appointment_id}",    response_model=AppointmentResponse,
-    summary="Перенос приёма (ресепшен — любой, врач — только свой)",
+    "/{appointment_id}",
+    response_model=AppointmentResponse,
+    summary="Перенос приёма (ресепшен — любой, врач — свой, пациент — свой за 24 ч)",
 )
 async def update_appointment(
     appointment_id: int,
@@ -141,7 +162,15 @@ async def update_appointment(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[
         User,
-        Depends(require_roles(RoleEnum.RECEPTIONIST, RoleEnum.DOCTOR)),
+        Depends(
+            require_roles(
+                RoleEnum.RECEPTIONIST,
+                RoleEnum.CLINIC_ADMIN,
+                RoleEnum.HEAD_DOCTOR,
+                RoleEnum.DOCTOR,
+                RoleEnum.PATIENT,
+            )
+        ),
     ],
 ) -> Appointment:
     repo = AppointmentRepository(db)
@@ -155,10 +184,7 @@ async def update_appointment(
 
     # Пациент переносит только свой приём и не позднее чем за 24 часа
     if current_user.has_role(RoleEnum.PATIENT):
-        if (
-            not current_user.patient_profile
-            or appt.patient_id != current_user.patient_profile.id
-        ):
+        if not current_user.patient_profile or appt.patient_id != current_user.patient_profile.id:
             raise PermissionDeniedError("Пациент может переносить только свой приём")
         AppointmentService.ensure_patient_time_limit(appt)
 
@@ -167,8 +193,11 @@ async def update_appointment(
 
 
 @router.patch(
-    "/{appointment_id}/status",    response_model=AppointmentResponse,
-    summary="Изменить статус приёма (ресепшен/врач — по правам, медсестра — прибытие)",
+    "/{appointment_id}/status",
+    response_model=AppointmentResponse,
+    summary=(
+        "Изменить статус приёма (ресепшен/врач — по правам, медсестра — прибытие, пациент — отмена)"
+    ),
 )
 async def update_status(
     appointment_id: int,
@@ -179,8 +208,11 @@ async def update_status(
         Depends(
             require_roles(
                 RoleEnum.RECEPTIONIST,
+                RoleEnum.CLINIC_ADMIN,
+                RoleEnum.HEAD_DOCTOR,
                 RoleEnum.DOCTOR,
                 RoleEnum.NURSE,
+                RoleEnum.PATIENT,
             )
         ),
     ],
@@ -190,8 +222,16 @@ async def update_status(
     if not appt:
         raise NotFoundError("Приём не найден")
 
+    # Пациент может только отменить свой приём и не позднее чем за 24 часа.
+    # Смена прочих статусов (завершить, «прибыл») — зона персонала.
+    if current_user.has_role(RoleEnum.PATIENT):
+        if not current_user.patient_profile or appt.patient_id != current_user.patient_profile.id:
+            raise PermissionDeniedError("Пациент может отменить только свой приём")
+        if data.status != AppointmentStatus.CANCELLED:
+            raise PermissionDeniedError("Пациент может только отменить свой приём")
+        AppointmentService.ensure_patient_time_limit(appt)
     # Медсестра отмечает только факт прибытия/начала приёма, не закрывая его.
-    if current_user.has_role(RoleEnum.NURSE):
+    elif current_user.has_role(RoleEnum.NURSE):
         if data.status not in NURSE_ALLOWED_STATUSES:
             raise PermissionDeniedError(
                 "Медсестра может отметить только «ожидает» или «идёт приём»"

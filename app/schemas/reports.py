@@ -39,3 +39,39 @@ class DoctorProductivityReport(ORMModel):
     total_closed_encounters: int = 0
     total_prescribed_procedures: int = 0
     total_performed_procedures: int = 0
+
+
+class SalaryItem(ORMModel):
+    """Расчёт зарплаты одного врача за период.
+
+    Зарплата = процент от приёмов + процент от процедур. Ставки берутся
+    из DoctorProfile (appointment_fee_percent, procedure_fee_percent),
+    поэтому бухгалтерия может их менять без правки кода.
+    """
+
+    doctor_id: int
+    doctor_name: str
+    specialization: str | None = None
+    clinic_id: int | None = None
+
+    appointment_fee_percent: str = Field("0.00", description="Ставка по приёмам, %")
+    procedure_fee_percent: str = Field("0.00", description="Ставка по процедурам, %")
+
+    appointments_revenue: str = Field("0.00", description="Выручка по приёмам")
+    procedures_revenue: str = Field("0.00", description="Выручка по процедурам")
+
+    appointment_salary: str = Field("0.00", description="Начислено за приёмы")
+    procedure_salary: str = Field("0.00", description="Начислено за процедуры")
+    total_salary: str = Field("0.00", description="Итого к выплате")
+
+
+class SalaryReport(ORMModel):
+    """Ведомость зарплат за период (только бухгалтерия и SA)."""
+
+    start_date: date
+    end_date: date
+    clinic_id: int | None = None
+    doctors: list[SalaryItem] = []
+    total_appointments_revenue: str = "0.00"
+    total_procedures_revenue: str = "0.00"
+    total_salary: str = "0.00"

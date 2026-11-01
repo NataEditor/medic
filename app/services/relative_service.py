@@ -173,7 +173,9 @@ class RelativeService:
     def _is_minor(patient: Patient) -> bool:
         """Несовершеннолетний ли пациент (младше 18 лет)."""
         today = date.today()
-        age = today.year - patient.birth_date.year - (
-            (today.month, today.day) < (patient.birth_date.month, patient.birth_date.day)
+        age = (
+            today.year
+            - patient.birth_date.year
+            - ((today.month, today.day) < (patient.birth_date.month, patient.birth_date.day))
         )
         return age < ADULT_AGE

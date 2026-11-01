@@ -10,7 +10,12 @@ from fastapi.responses import JSONResponse
 from app.api.v1 import api_v1_router
 from app.core.config import settings
 from app.core.exceptions import AppError
-from app.core.logging import logger, request_id_ctx, setup_logging
+from app.core.logging import (
+    log_security_event,
+    logger,
+    request_id_ctx,
+    setup_logging,
+)
 
 
 @asynccontextmanager
@@ -81,9 +86,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next) -> Response:
-    """Генерирует или пробрасывает X-Request-ID и измеряет время ответа."""
+    """Генерирует или пробрасывает X-Request-ID, измеряет время и логирует запрос."""
     req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     token = request_id_ctx.set(req_id)
     start_time = time.perf_counter()
@@ -93,7 +99,33 @@ async def request_context_middleware(request: Request, call_next) -> Response:
         process_time_ms = (time.perf_counter() - start_time) * 1000
         response.headers["X-Request-ID"] = req_id
         response.headers["X-Process-Time-Ms"] = f"{process_time_ms:.2f}"
+
+        # Логируем каждый HTTP-запрос: метод, путь, статус и время обработки.
+        # Уровень зависит от статуса: 5xx — ошибка, 4xx — предупреждение.
+        log_message = "{method} {path} -> {status} за {ms:.1f} мс"
+        log_args = {
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "ms": process_time_ms,
+        }
+        if response.status_code >= 500:
+            logger.error(log_message, **log_args)
+        elif response.status_code >= 400:
+            logger.warning(log_message, **log_args)
+        else:
+            logger.info(log_message, **log_args)
+
         return response
+    except Exception:
+        process_time_ms = (time.perf_counter() - start_time) * 1000
+        logger.exception(
+            "{method} {path} -> НЕОБРАБОТАННАЯ ОШИБКА за {ms:.1f} мс",
+            method=request.method,
+            path=request.url.path,
+            ms=process_time_ms,
+        )
+        raise
     finally:
         request_id_ctx.reset(token)
 
@@ -101,6 +133,19 @@ async def request_context_middleware(request: Request, call_next) -> Response:
 @app.exception_handler(AppError)
 async def domain_exception_handler(_: Request, exc: AppError) -> JSONResponse:
     """Единый формат ответов на доменные ошибки бизнес-логики."""
+    # Отказы в доступе и ошибки аутентификации — события безопасности.
+    if exc.status_code in (401, 403):
+        log_security_event(
+            "access_denied",
+            exc.message,
+            code=exc.code,
+            status=exc.status_code,
+        )
+    elif exc.status_code >= 500:
+        logger.error("Доменная ошибка {}: {}", exc.code, exc.message)
+    else:
+        logger.info("Отклонено ({}): {}", exc.code, exc.message)
+
     return JSONResponse(
         status_code=exc.status_code,
         content={

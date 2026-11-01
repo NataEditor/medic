@@ -32,6 +32,7 @@ class BootstrapService:
             )
         )
         return int((await self.session.execute(stmt)).scalar_one()) > 0
+
     async def create_super_admin(
         self,
         *,

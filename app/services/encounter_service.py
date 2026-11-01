@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
+from app.core.logging import logger
 from app.core.utils import utcnow
 from app.models.entities import (
     Appointment,
@@ -54,9 +55,7 @@ class EncounterService:
             # Один слот — максимум одно обращение
             existing = await self._get_by_appointment(appointment.id)
             if existing is not None:
-                raise BusinessRuleError(
-                    f"По этому приёму уже открыто обращение (id={existing.id})"
-                )
+                raise BusinessRuleError(f"По этому приёму уже открыто обращение (id={existing.id})")
 
             patient_id = appointment.patient_id
             clinic_id = appointment.clinic_id
@@ -96,6 +95,13 @@ class EncounterService:
 
         await self.session.flush()
         await self.session.refresh(encounter)
+        logger.info(
+            "Открыто обращение id={}: врач={} пациент={} клиника={}",
+            encounter.id,
+            doctor.id,
+            patient_id,
+            clinic_id,
+        )
         return encounter
 
     async def close_encounter(self, doctor: User, encounter_id: int) -> Encounter:
@@ -119,6 +125,12 @@ class EncounterService:
 
         await self.session.flush()
         await self.session.refresh(encounter)
+        logger.info(
+            "Закрыто обращение id={}: врач={} пациент={}",
+            encounter.id,
+            doctor.id,
+            encounter.patient_id,
+        )
         return encounter
 
     async def get_encounter(self, encounter_id: int) -> Encounter:
@@ -140,8 +152,7 @@ class EncounterService:
         encounter = await self.get_encounter(encounter_id)
         if encounter.status != EncounterStatus.OPEN:
             raise BusinessRuleError(
-                "Обращение закрыто: новые записи запрещены. "
-                "Оформите корректирующую запись."
+                "Обращение закрыто: новые записи запрещены. Оформите корректирующую запись."
             )
         return encounter
 

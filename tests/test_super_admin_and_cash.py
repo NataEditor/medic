@@ -25,9 +25,7 @@ class TestSuperAdminAndCashProtection(unittest.IsolatedAsyncioTestCase):
         )
 
         async with self.session_factory() as session:
-            clinic = Clinic(
-                name="Клиника", code="C1", address="Адрес", phone="+70000000000"
-            )
+            clinic = Clinic(name="Клиника", code="C1", address="Адрес", phone="+70000000000")
             super_admin = User(
                 email="root@medic.local",
                 phone="+70000000001",

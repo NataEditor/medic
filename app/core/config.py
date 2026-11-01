@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
 
     redis_url: str = "redis://localhost:6379/0"
+    # Хранилище счётчиков неудачных входов.
+    # "redis" — общее для всех инстансов (нужно при горизонтальном
+    # масштабировании), "memory" — в памяти процесса (для тестов и
+    # локальной разработки без Redis).
+    login_guard_backend: str = "redis"
+    # Префикс ключей в Redis, чтобы не пересекаться с Celery и кэшем.
+    login_guard_key_prefix: str = "medic:login_guard"
 
     rabbitmq_user: str = "medic"
     rabbitmq_password: str = "medic"

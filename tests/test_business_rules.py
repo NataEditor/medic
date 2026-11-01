@@ -179,9 +179,7 @@ class TestBusinessRules(unittest.IsolatedAsyncioTestCase):
             await session.commit()
 
             invoice = (
-                await session.execute(
-                    select(Invoice).where(Invoice.assignment_id == assignment.id)
-                )
+                await session.execute(select(Invoice).where(Invoice.assignment_id == assignment.id))
             ).scalar_one_or_none()
             self.assertIsNotNone(invoice, "Счёт за назначение должен создаться")
             self.assertEqual(invoice.amount, Decimal("800.00"))
@@ -209,9 +207,7 @@ class TestBusinessRules(unittest.IsolatedAsyncioTestCase):
             await session.commit()
 
             invoice = (
-                await session.execute(
-                    select(Invoice).where(Invoice.assignment_id == assignment.id)
-                )
+                await session.execute(select(Invoice).where(Invoice.assignment_id == assignment.id))
             ).scalar_one_or_none()
             self.assertIsNone(invoice)
 
@@ -235,9 +231,7 @@ class TestBusinessRules(unittest.IsolatedAsyncioTestCase):
             await session.commit()
 
             invoice = (
-                await session.execute(
-                    select(Invoice).where(Invoice.appointment_id == appt.id)
-                )
+                await session.execute(select(Invoice).where(Invoice.appointment_id == appt.id))
             ).scalar_one()
             self.assertEqual(invoice.status, PaymentStatus.PENDING)
 
@@ -269,9 +263,7 @@ class TestBusinessRules(unittest.IsolatedAsyncioTestCase):
             await session.commit()
 
             invoice = (
-                await session.execute(
-                    select(Invoice).where(Invoice.appointment_id == appt.id)
-                )
+                await session.execute(select(Invoice).where(Invoice.appointment_id == appt.id))
             ).scalar_one()
 
             # Имитируем оплату: помечаем счёт оплаченным и добавляем платёж

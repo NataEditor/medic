@@ -2,7 +2,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.entities import MedicalRecord, MedicalRecordEntry, Patient
+from app.models.entities import Appointment, MedicalRecord, MedicalRecordEntry, Patient
 from app.repositories.base import BaseRepository
 
 
@@ -37,9 +37,31 @@ class PatientRepository(BaseRepository[Patient]):
         query: str | None = None,
         offset: int = 0,
         limit: int = 20,
+        doctor_id: int | None = None,
+        clinic_id: int | None = None,
     ) -> tuple[list[Patient], int]:
+        """Поиск пациентов с ролевыми ограничениями области видимости.
+
+        - doctor_id: правило «по касанию» — только пациенты, с которыми
+          у врача есть приём (назначенный или в прошлом).
+        - clinic_id: изоляция по клинике (🏥). None — вся сеть (SA, главврач).
+        """
         stmt = select(Patient)
         count_stmt = select(func.count()).select_from(Patient)
+
+        if doctor_id is not None:
+            # «По касанию»: пациент виден, только если есть связь через приём
+            linked = (
+                select(Appointment.patient_id)
+                .where(Appointment.doctor_id == doctor_id)
+                .scalar_subquery()
+            )
+            stmt = stmt.where(Patient.id.in_(linked))
+            count_stmt = count_stmt.where(Patient.id.in_(linked))
+
+        if clinic_id is not None:
+            stmt = stmt.where(Patient.clinic_id == clinic_id)
+            count_stmt = count_stmt.where(Patient.clinic_id == clinic_id)
 
         if query:
             q = f"%{query.strip()}%"

@@ -13,7 +13,10 @@ from datetime import UTC, date, datetime, timedelta
 from app.api.deps import (
     PATIENT_CREATE_ROLES,
     can_read_emk,
+    can_view_emr,
+    can_view_patient_card_and_procedures,
     ensure_medical_access,
+    ensure_patient_card_access,
     is_admin,
     is_clinic_admin,
     is_medical_staff,
@@ -96,6 +99,39 @@ class TestClinicAdminSeparation(unittest.TestCase):
         self.assertTrue(is_admin(user))
         self.assertTrue(is_medical_staff(user))
         self.assertTrue(can_read_emk(user))
+
+
+class TestNurseEmrSeparation(unittest.TestCase):
+    """Медсестра — медперсонал, но врачебные записи ЭМК не читает.
+
+    Она выполняет процедуры, видит назначения и анализы, но историю
+    болезни (осмотры, диагнозы, МКБ-10) читает только врач.
+    """
+
+    def test_nurse_is_medical_staff(self) -> None:
+        nurse = _user([RoleEnum.NURSE])
+        self.assertTrue(is_medical_staff(nurse))
+        self.assertTrue(can_view_patient_card_and_procedures(nurse))
+
+    def test_nurse_cannot_read_emr(self) -> None:
+        nurse = _user([RoleEnum.NURSE])
+        self.assertFalse(can_view_emr(nurse))
+        self.assertFalse(can_read_emk(nurse))
+
+    def test_doctor_and_head_doctor_read_emr(self) -> None:
+        self.assertTrue(can_view_emr(_user([RoleEnum.DOCTOR])))
+        self.assertTrue(can_view_emr(_user([RoleEnum.HEAD_DOCTOR])))
+        self.assertTrue(can_view_emr(_user([RoleEnum.SUPER_ADMIN])))
+
+    def test_receptionist_and_accountant_cannot_read_emr(self) -> None:
+        self.assertFalse(can_view_emr(_user([RoleEnum.RECEPTIONIST])))
+        self.assertFalse(can_view_emr(_user([RoleEnum.ACCOUNTANT])))
+        self.assertFalse(can_view_emr(_user([RoleEnum.CLINIC_ADMIN])))
+
+    def test_nurse_plus_doctor_reads_emr(self) -> None:
+        """Мультиролевость: медсестра-врач читает ЭМК как врач."""
+        user = _user([RoleEnum.NURSE, RoleEnum.DOCTOR])
+        self.assertTrue(can_view_emr(user))
 
 
 class TestPatientCreateRoles(unittest.TestCase):
@@ -199,6 +235,34 @@ class TestMedicalAccessByTouch(unittest.IsolatedAsyncioTestCase):
             acc = _user([RoleEnum.ACCOUNTANT], user_id=97)
             with self.assertRaises(PermissionDeniedError):
                 await ensure_medical_access(session, acc, self.patient_id)
+
+    async def test_nurse_denied_emr_access(self) -> None:
+        """Медсестра не читает врачебные записи ЭМК (только карточку и процедуры)."""
+        async with self.session_factory() as session:
+            nurse = _user([RoleEnum.NURSE], user_id=96)
+            with self.assertRaises(PermissionDeniedError):
+                await ensure_medical_access(session, nurse, self.patient_id)
+
+    async def test_receptionist_denied_emr_access(self) -> None:
+        """Ресепшен видит карточку без ЭМК."""
+        async with self.session_factory() as session:
+            receptionist = _user([RoleEnum.RECEPTIONIST], user_id=95)
+            with self.assertRaises(PermissionDeniedError):
+                await ensure_medical_access(session, receptionist, self.patient_id)
+
+    async def test_nurse_allowed_patient_card_access(self) -> None:
+        """Медсестра видит карточку, назначения и анализы своей клиники."""
+        async with self.session_factory() as session:
+            nurse = _user([RoleEnum.NURSE], user_id=94)
+            # Не должно бросить исключение
+            await ensure_patient_card_access(session, nurse, self.patient_id)
+
+    async def test_doctor_without_appointment_denied_card_access(self) -> None:
+        """Врач без приёма не видит даже карточку пациента."""
+        async with self.session_factory() as session:
+            other = await session.get(User, self.other_doctor_id)
+            with self.assertRaises(PermissionDeniedError):
+                await ensure_patient_card_access(session, other, self.patient_id)
 
 
 if __name__ == "__main__":

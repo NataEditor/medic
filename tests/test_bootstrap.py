@@ -141,9 +141,7 @@ class TestDemoSeedService(unittest.IsolatedAsyncioTestCase):
             doctors = int(
                 (
                     await session.execute(
-                        select(func.count(User.id)).where(
-                            User.has_any_role_sql(RoleEnum.DOCTOR)
-                        )
+                        select(func.count(User.id)).where(User.has_any_role_sql(RoleEnum.DOCTOR))
                     )
                 ).scalar_one()
             )

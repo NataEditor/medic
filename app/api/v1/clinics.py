@@ -3,12 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import get_current_user, require_super_admin
 from app.core.constants import DEFAULT_PAGE, DEFAULT_PAGE_SIZE
 from app.core.exceptions import NotFoundError
 from app.db.session import get_db
 from app.models.entities import Clinic, User
-from app.models.enums import RoleEnum
 from app.repositories.base import BaseRepository
 from app.schemas.clinics import ClinicCreate, ClinicResponse, ClinicUpdate
 from app.schemas.common import PaginatedResponse
@@ -40,12 +39,12 @@ async def list_clinics(
     "",
     response_model=ClinicResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Создать новую клинику/филиал (только главврач)",
+    summary="Создать новую клинику/филиал (только супер-админ)",
 )
 async def create_clinic(
     data: ClinicCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_roles(RoleEnum.HEAD_DOCTOR))],
+    _: Annotated[User, Depends(require_super_admin())],
 ) -> Clinic:
     repo = BaseRepository(Clinic, db)
     clinic = Clinic(**data.model_dump())
@@ -68,13 +67,13 @@ async def get_clinic(
 @router.patch(
     "/{clinic_id}",
     response_model=ClinicResponse,
-    summary="Обновить данные клиники (только главврач)",
+    summary="Обновить данные клиники (только супер-админ)",
 )
 async def update_clinic(
     clinic_id: int,
     data: ClinicUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_roles(RoleEnum.HEAD_DOCTOR))],
+    _: Annotated[User, Depends(require_super_admin())],
 ) -> Clinic:
     repo = BaseRepository(Clinic, db)
     clinic = await repo.get_by_id(clinic_id)

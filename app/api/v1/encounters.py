@@ -3,10 +3,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import ensure_medical_access, require_roles
+from app.api.deps import (
+    EMR_READ_ROLES,
+    EMR_WRITE_ROLES,
+    ensure_medical_access,
+    require_roles,
+)
 from app.db.session import get_db
 from app.models.entities import Encounter, User
-from app.models.enums import RoleEnum
 from app.schemas.encounters import EncounterClose, EncounterOpen, EncounterResponse
 from app.services.encounter_service import EncounterService
 
@@ -22,7 +26,7 @@ router = APIRouter(prefix="/encounters", tags=["Медицинские обра�
 async def open_encounter(
     data: EncounterOpen,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_roles(RoleEnum.DOCTOR))],
+    current_user: Annotated[User, Depends(require_roles(*EMR_WRITE_ROLES))],
 ) -> Encounter:
     """Врач открывает обращение из слота расписания или по walk-in пациенту."""
     service = EncounterService(db)
@@ -38,7 +42,7 @@ async def close_encounter(
     encounter_id: int,
     data: EncounterClose,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_roles(RoleEnum.DOCTOR))],
+    current_user: Annotated[User, Depends(require_roles(*EMR_WRITE_ROLES))],
 ) -> Encounter:
     """После закрытия записи в обращение не редактируются."""
     service = EncounterService(db)
@@ -55,7 +59,7 @@ async def get_encounter(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[
         User,
-        Depends(require_roles(RoleEnum.DOCTOR, RoleEnum.NURSE)),
+        Depends(require_roles(*EMR_READ_ROLES)),
     ],
 ) -> Encounter:
     service = EncounterService(db)
@@ -74,7 +78,7 @@ async def list_patient_encounters(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[
         User,
-        Depends(require_roles(RoleEnum.DOCTOR, RoleEnum.NURSE)),
+        Depends(require_roles(*EMR_READ_ROLES)),
     ],
 ) -> list[Encounter]:
     await ensure_medical_access(db, current_user, patient_id)

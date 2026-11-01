@@ -1,10 +1,11 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import EmailStr, Field
+from pydantic import Field
 
 from app.models.enums import RoleEnum
 from app.schemas.common import ORMModel
+from app.schemas.types import Email
 
 
 class DoctorProfileBase(ORMModel):
@@ -25,7 +26,7 @@ class DoctorProfileResponse(DoctorProfileBase):
 
 class UserBase(ORMModel):
     clinic_id: int | None = None
-    email: EmailStr
+    email: Email
     phone: str = Field(..., max_length=50)
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
@@ -46,7 +47,7 @@ class AdminCreate(ORMModel):
     это исключает эскалацию прав через API.
     """
 
-    email: EmailStr
+    email: Email
     phone: str = Field(..., max_length=50)
     password: str = Field(..., min_length=8)
     first_name: str = Field(..., min_length=1, max_length=100)
@@ -57,7 +58,7 @@ class AdminCreate(ORMModel):
 
 class UserUpdate(ORMModel):
     clinic_id: int | None = None
-    email: EmailStr | None = None
+    email: Email | None = None
     phone: str | None = None
     first_name: str | None = None
     last_name: str | None = None

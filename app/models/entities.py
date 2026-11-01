@@ -35,6 +35,7 @@ from app.core.constants import (
 from app.core.utils import build_full_name, utcnow
 from app.db.base import Base, TimestampMixin
 from app.models.enums import (
+    AnonymizationRequestStatus,
     AppointmentStatus,
     AssignmentStatus,
     AssignmentType,
@@ -225,12 +226,7 @@ class User(Base, TimestampMixin):
         """
         from sqlalchemy import String, cast, or_
 
-        return or_(
-            *[
-                cast(User.roles, String).like(f'%"{role.value}"%')
-                for role in roles
-            ]
-        )
+        return or_(*[cast(User.roles, String).like(f'%"{role.value}"%') for role in roles])
 
 
 class DoctorProfile(Base, TimestampMixin):
@@ -359,6 +355,8 @@ class Patient(Base, TimestampMixin):
     Поля:
     - id: Уникальный внутренний идентификатор пациента.
     - user_id: Связь с учётной записью User (опционально, если пациент пользуется ЛК).
+    - created_by_clinic_id: Клиника, чей сотрудник завёл карту (факт регистрации,
+      не «принадлежность»). Нужна для админ-операций над картой без приёмов.
     - first_name, last_name, middle_name: ФИО пациента.
     - passport_series: Серия паспорта РФ (ровно 4 цифры, часть уникального ключа).
     - passport_number: Номер паспорта РФ (ровно 6 цифр, часть уникального ключа).
@@ -390,6 +388,13 @@ class Patient(Base, TimestampMixin):
     user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), unique=True, nullable=True
     )
+    # Клиника, чей сотрудник завёл карту. Это НЕ «принадлежность» пациента
+    # (карта общая для сети), а факт регистрации. Используется только для
+    # административных операций над картой, у которой ещё нет приёмов:
+    # как только появляется первый приём, права расходятся по клиникам приёмов.
+    created_by_clinic_id: Mapped[int | None] = mapped_column(
+        ForeignKey("clinics.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     first_name: Mapped[str] = mapped_column(String(MEDIUM_STRING_LENGTH), nullable=False)
     last_name: Mapped[str] = mapped_column(String(MEDIUM_STRING_LENGTH), nullable=False)
     middle_name: Mapped[str | None] = mapped_column(String(MEDIUM_STRING_LENGTH), nullable=True)
@@ -420,15 +425,9 @@ class Patient(Base, TimestampMixin):
         nullable=False,
         index=True,
     )
-    activated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    anonymized_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     birth_date: Mapped[date] = mapped_column(Date, nullable=False)
     gender: Mapped[str] = mapped_column(String(10), nullable=False)  # "M" / "F"
@@ -510,9 +509,7 @@ class PatientRelative(Base, TimestampMixin):
     confirmed_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    confirmed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     patient: Mapped[Patient] = relationship(foreign_keys=[patient_id])
@@ -678,9 +675,7 @@ class Encounter(Base, TimestampMixin):
         index=True,
     )
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    closed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     chief_complaint: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     appointment: Mapped["Appointment | None"] = relationship(back_populates="encounter")
@@ -1127,12 +1122,65 @@ class RefundRequest(Base, TimestampMixin):
         index=True,
     )
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     payment: Mapped[Payment] = relationship(foreign_keys=[payment_id])
     invoice: Mapped[Invoice] = relationship()
+    requested_by: Mapped[User] = relationship(foreign_keys=[requested_by_id])
+    reviewed_by: Mapped[User | None] = relationship(foreign_keys=[reviewed_by_id])
+
+
+class AnonymizationRequest(Base, TimestampMixin):
+    """Заявка пациента на обезличивание своего аккаунта (152-ФЗ).
+
+    Роль в системе:
+    Легальный механизм «права на забвение». Пациент не может стереть
+    свою историю болезни самостоятельно — он подаёт заявку, а решение
+    принимает супер-админ. Медицинские записи при этом сохраняются
+    по срокам Минздрава, но карта теряет связь с человеком.
+
+    Поля:
+    - id: Идентификатор заявки.
+    - patient_id: Пациент, чью карту просят обезличить.
+    - requested_by_id: Кто подал заявку (сам пациент или его ЛК).
+    - reviewed_by_id: Кто рассмотрел (супер-админ).
+    - reason: Причина обращения (обязательна).
+    - status: PENDING → APPROVED / REJECTED / CANCELLED.
+    - review_comment: Комментарий супер-админа при решении.
+    - reviewed_at: Когда рассмотрена.
+
+    Связи:
+    - patient: Карта пациента.
+    - requested_by, reviewed_by: Участники процесса.
+    """
+
+    __tablename__ = "anonymization_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_id: Mapped[int] = mapped_column(
+        ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    requested_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    reviewed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[AnonymizationRequestStatus] = mapped_column(
+        Enum(
+            AnonymizationRequestStatus,
+            name="anonymization_request_status_enum",
+            native_enum=False,
+        ),
+        default=AnonymizationRequestStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    patient: Mapped[Patient] = relationship(foreign_keys=[patient_id])
     requested_by: Mapped[User] = relationship(foreign_keys=[requested_by_id])
     reviewed_by: Mapped[User | None] = relationship(foreign_keys=[reviewed_by_id])
 
@@ -1177,3 +1225,7 @@ class AuditLog(Base):
         nullable=False,
         index=True,
     )
+
+    # Связь нужна для читаемости журнала (ФИО инициатора) и для изоляции
+    # по клинике: админ клиники видит только записи своих сотрудников.
+    user: Mapped["User | None"] = relationship(foreign_keys=[user_id])

@@ -217,9 +217,7 @@ class TestEncounter(unittest.IsolatedAsyncioTestCase):
         async with self.session_factory() as session:
             doctor = await session.get(User, self.doctor_id)
             service = EncounterService(session)
-            await service.open_encounter(
-                doctor, EncounterOpen(appointment_id=self.appointment_id)
-            )
+            await service.open_encounter(doctor, EncounterOpen(appointment_id=self.appointment_id))
             await session.commit()
 
             with self.assertRaises(BusinessRuleError):

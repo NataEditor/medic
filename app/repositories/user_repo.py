@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,6 +31,34 @@ class UserRepository(BaseRepository[User]):
         stmt = select(User).where(User.phone == phone.strip())
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
+
+    async def list_staff(
+        self,
+        clinic_id: int | None = None,
+        offset: int = 0,
+        limit: int = 20,
+    ) -> tuple[list[User], int]:
+        """Список сотрудников с предзагрузкой профиля врача.
+
+        doctor_profile грузим через selectinload: без этого сериализация
+        UserResponse в async-контексте падает с MissingGreenlet.
+        clinic_id=None — вся сеть (супер-админ).
+        """
+        stmt = select(User).options(
+            selectinload(User.doctor_profile),
+            selectinload(User.clinic),
+        )
+        count_stmt = select(func.count()).select_from(User)
+
+        if clinic_id is not None:
+            stmt = stmt.where(User.clinic_id == clinic_id)
+            count_stmt = count_stmt.where(User.clinic_id == clinic_id)
+
+        stmt = stmt.order_by(User.last_name, User.first_name).offset(offset).limit(limit)
+
+        items = list((await self.session.execute(stmt)).scalars().all())
+        total = int((await self.session.execute(count_stmt)).scalar_one())
+        return items, total
 
     async def list_doctors(self, clinic_id: int | None = None) -> list[User]:
         stmt = (

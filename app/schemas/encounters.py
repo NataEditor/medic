@@ -17,9 +17,7 @@ class EncounterOpen(ORMModel):
     appointment_id: int | None = Field(
         None, description="Слот расписания, из которого открывается приём"
     )
-    patient_id: int | None = Field(
-        None, description="Пациент для приёма без записи (walk-in)"
-    )
+    patient_id: int | None = Field(None, description="Пациент для приёма без записи (walk-in)")
     chief_complaint: str | None = Field(
         None, max_length=500, description="Краткая причина обращения"
     )

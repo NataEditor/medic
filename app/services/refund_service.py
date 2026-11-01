@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
+from app.core.logging import logger
 from app.core.utils import utcnow
 from app.models.entities import Invoice, Payment, RefundRequest, User
 from app.models.enums import PaymentStatus, RefundRequestStatus, RoleEnum
@@ -56,9 +57,7 @@ class RefundService:
 
         # Нельзя вернуть больше, чем оплачено по этому платежу
         if data.amount > payment.amount:
-            raise BusinessRuleError(
-                f"Сумма возврата превышает платёж ({payment.amount})"
-            )
+            raise BusinessRuleError(f"Сумма возврата превышает платёж ({payment.amount})")
 
         # Не должно быть второй активной заявки по этому платежу
         existing = await self._get_pending_for_payment(payment.id)
@@ -78,6 +77,13 @@ class RefundService:
         self.session.add(request)
         await self.session.flush()
         await self.session.refresh(request)
+        logger.info(
+            "Создана заявка на возврат id={}: платёж={} сумма={} автор={}",
+            request.id,
+            payment.id,
+            data.amount,
+            actor.id,
+        )
         return request
 
     # ----- Рассмотрение заявки (бухгалтерия) -----
@@ -99,9 +105,7 @@ class RefundService:
         if request is None:
             raise NotFoundError("Заявка не найдена")
         if request.status != RefundRequestStatus.PENDING:
-            raise BusinessRuleError(
-                f"Заявка уже рассмотрена (статус: {request.status.value})"
-            )
+            raise BusinessRuleError(f"Заявка уже рассмотрена (статус: {request.status.value})")
 
         # Инициатор не может сам подтвердить свою заявку (двойной контроль)
         if request.requested_by_id == reviewer.id:
@@ -121,6 +125,12 @@ class RefundService:
 
         await self.session.flush()
         await self.session.refresh(request)
+        logger.info(
+            "Заявка на возврат id={} рассмотрена: статус={} бухгалтер={}",
+            request.id,
+            request.status.value,
+            reviewer.id,
+        )
         return request
 
     async def cancel_refund_request(self, actor: User, request_id: int) -> RefundRequest:
@@ -213,6 +223,14 @@ class RefundService:
             entity_name="payment",
             entity_id=payment.id,
             changes=f'{{"reason": "{reason}", "amount": "{payment.amount}"}}',
+        )
+        logger.info(
+            "Создана сторно-проводка id={}: оригинал={} сумма={} автор={} причина='{}'",
+            reversal.id,
+            payment.id,
+            -payment.amount,
+            actor.id,
+            reason,
         )
         return reversal
 

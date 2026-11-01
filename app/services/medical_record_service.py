@@ -3,6 +3,7 @@ import json
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError, PermissionDeniedError
+from app.core.logging import logger
 from app.models.entities import MedicalRecord, MedicalRecordEntry, User
 from app.models.enums import RoleEnum
 from app.repositories.base import BaseRepository
@@ -53,4 +54,11 @@ class MedicalRecordService:
             changes=json.dumps({"record_id": record_id, "diagnosis": entry.diagnosis_icd10}),
         )
 
+        logger.info(
+            "Внесена запись в ЭМК: запись={} карта={} врач={} диагноз={}",
+            created.id,
+            record_id,
+            doctor.id,
+            entry.diagnosis_icd10,
+        )
         return created

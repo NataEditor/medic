@@ -35,12 +35,27 @@ ONE_HUNDRED_PERCENT: Decimal = Decimal(100)
 CASH_AUDIT_ENTITY: str = "payment"
 ACTION_REFUND_PAYMENT: str = "refund_payment"
 
+# ----- Аудит и защита ПДн (152-ФЗ) -----
+# Тип события «просмотр персональных данных»: фиксируется при каждом
+# открытии ЭМК или скана паспорта. Нужен для разбора инцидентов.
+ACTION_VIEW_PDN: str = "VIEW_PDN"
+# Псевдонимы конкретных просмотров (для фильтрации в журнале).
+ACTION_VIEW_MEDICAL_RECORD: str = "view_medical_record"
+ACTION_VIEW_PASSPORT_SCAN: str = "view_passport_scan"
+
+# ----- Защита от подбора паролей (rate limiting) -----
+# После N неудачных попыток вход блокируется на LOCKOUT_MINUTES минут.
+# Счётчик ведётся по паре «логин + IP», чтобы атака с одного адреса
+# не блокировала всех пользователей, и наоборот.
+LOGIN_MAX_ATTEMPTS: int = 5
+LOGIN_LOCKOUT_MINUTES: int = 15
+# Окно, в котором считаются попытки (после него счётчик сбрасывается).
+LOGIN_ATTEMPT_WINDOW_MINUTES: int = 15
+
 # ----- Личный кабинет пациента -----
 # Срок жизни временного пароля, отправленного пациенту по SMS.
 TEMP_PASSWORD_TTL_HOURS: int = 24
-TEMP_PASSWORD_LENGTH: int = 8
-
-# ----- Файлы и медиа -----
+TEMP_PASSWORD_LENGTH: int = 8  # ----- Файлы и медиа -----
 ALLOWED_ANALYSIS_EXTENSIONS: tuple[str, ...] = (
     ".pdf",
     ".png",

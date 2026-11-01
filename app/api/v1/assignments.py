@@ -3,8 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import ensure_medical_access, is_medical_staff, require_roles
-from app.core.exceptions import NotFoundError, PermissionDeniedError
+from app.api.deps import (
+    EMR_WRITE_ROLES,
+    ensure_patient_card_access,
+    require_roles,
+)
+from app.core.access import resolve_patient_id_from_assignment
+from app.core.exceptions import NotFoundError
 from app.db.session import get_db
 from app.models.entities import Assignment, MedicalRecord, ProcedureExecution, User
 from app.models.enums import AssignmentStatus, AssignmentType, RoleEnum
@@ -31,7 +36,7 @@ router = APIRouter(prefix="/assignments", tags=["Назначения и про�
 async def create_assignment(
     data: AssignmentCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_roles(RoleEnum.DOCTOR))],
+    current_user: Annotated[User, Depends(require_roles(*EMR_WRITE_ROLES))],
 ) -> Assignment:
     service = AssignmentService(db)
     return await service.create_assignment(current_user, data)
@@ -51,29 +56,30 @@ async def list_assignments(
             require_roles(
                 RoleEnum.DOCTOR,
                 RoleEnum.NURSE,
-                RoleEnum.RECEPTIONIST,
+                RoleEnum.HEAD_DOCTOR,
             )
         ),
     ],
     type_filter: AssignmentType | None = None,
     status_filter: AssignmentStatus | None = None,
 ) -> list[Assignment]:
-    """Назначения по медкарте. Врач — только «по касанию» (есть приём)."""
+    """Назначения по медкарте.
+
+    Ресепшен назначения не видит: это медицинские данные.
+    Врач — только «по касанию» (есть приём с пациентом).
+    """
     record = await db.get(MedicalRecord, record_id)
     if not record:
         raise NotFoundError("Медкарта не найдена")
 
-    if current_user.has_role(RoleEnum.RECEPTIONIST) and not is_medical_staff(current_user):
-        raise PermissionDeniedError("Ресепшен не имеет доступа к назначениям")
-
-    await ensure_medical_access(db, current_user, record.patient_id)
-
+    await ensure_patient_card_access(db, current_user, record.patient_id)
     repo = AssignmentRepository(db)
     return await repo.list_for_record(
         record_id=record_id,
         type_=type_filter,
         status=status_filter,
     )
+
 
 @router.get(
     "/{assignment_id}",
@@ -83,17 +89,20 @@ async def list_assignments(
 async def get_assignment(
     assignment_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[
+    current_user: Annotated[
         User,
         Depends(
             require_roles(
                 RoleEnum.DOCTOR,
                 RoleEnum.NURSE,
-                RoleEnum.RECEPTIONIST,
+                RoleEnum.HEAD_DOCTOR,
             )
         ),
     ],
 ) -> Assignment:
+    """Детали назначения. Врач — только «по касанию» (есть приём с пациентом)."""
+    patient_id = await resolve_patient_id_from_assignment(db, assignment_id)
+    await ensure_patient_card_access(db, current_user, patient_id)
     repo = AssignmentRepository(db)
     assignment = await repo.get_detailed(assignment_id)
     if not assignment:
@@ -110,7 +119,7 @@ async def update_assignment(
     assignment_id: int,
     data: AssignmentUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_roles(RoleEnum.DOCTOR))],
+    current_user: Annotated[User, Depends(require_roles(*EMR_WRITE_ROLES))],
 ) -> Assignment:
     service = AssignmentService(db)
     return await service.update_assignment(current_user, assignment_id, data)
@@ -124,7 +133,7 @@ async def update_assignment(
 async def delete_assignment(
     assignment_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_roles(RoleEnum.DOCTOR))],
+    current_user: Annotated[User, Depends(require_roles(*EMR_WRITE_ROLES))],
 ) -> StatusResponse:
     service = AssignmentService(db)
     await service.delete_assignment(current_user, assignment_id)
@@ -142,7 +151,13 @@ async def record_execution(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[
         User,
-        Depends(require_roles(RoleEnum.NURSE, RoleEnum.DOCTOR)),
+        Depends(
+            require_roles(
+                RoleEnum.NURSE,
+                RoleEnum.DOCTOR,
+                RoleEnum.HEAD_DOCTOR,
+            )
+        ),
     ],
 ) -> ProcedureExecution:
     """Врач отмечает процедуры, выполненные им лично (УЗИ, инъекции, блокады).

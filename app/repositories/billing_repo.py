@@ -50,6 +50,7 @@ class BillingRepository(BaseRepository[Invoice]):
         stmt = select(Invoice).where(Invoice.appointment_id == appointment_id)
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
+
     async def add_payment(self, payment: Payment) -> Payment:
         self.session.add(payment)
         await self.session.flush()

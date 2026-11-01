@@ -4,7 +4,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import (
+    SCHEDULE_MANAGE_ROLES,
+    SLOT_VIEW_ROLES,
+    ensure_doctor_clinic_access,
+    require_roles,
+)
 from app.core.constants import DEFAULT_APPOINTMENT_DURATION_MINUTES
 from app.core.exceptions import NotFoundError
 from app.db.session import get_db
@@ -35,8 +40,9 @@ router = APIRouter(prefix="/schedules", tags=["Расписание врачей
 async def create_schedule(
     data: DoctorScheduleCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_roles(RoleEnum.RECEPTIONIST))],
+    current_user: Annotated[User, Depends(require_roles(*SCHEDULE_MANAGE_ROLES))],
 ) -> DoctorSchedule:
+    await ensure_doctor_clinic_access(db, current_user, data.doctor_id)
     service = ScheduleService(db)
     return await service.create_schedule(data)
 
@@ -44,13 +50,26 @@ async def create_schedule(
 @router.get(
     "/doctor/{doctor_id}",
     response_model=list[DoctorScheduleResponse],
-    summary="Все смены врача по дням недели",
+    summary="Все смены врача по дням недели (персонал)",
 )
 async def list_doctor_schedules(
     doctor_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[
+        User,
+        Depends(
+            require_roles(
+                RoleEnum.RECEPTIONIST,
+                RoleEnum.CLINIC_ADMIN,
+                RoleEnum.HEAD_DOCTOR,
+                RoleEnum.DOCTOR,
+                RoleEnum.NURSE,
+            )
+        ),
+    ],
 ) -> list[DoctorSchedule]:
+    """Шаблоны смен врача. Пациент видит только свободные слоты (другой эндпоинт)."""
+    await ensure_doctor_clinic_access(db, current_user, doctor_id)
     repo = ScheduleRepository(db)
     return await repo.list_doctor_schedules(doctor_id)
 
@@ -64,8 +83,13 @@ async def update_schedule(
     schedule_id: int,
     data: DoctorScheduleUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_roles(RoleEnum.RECEPTIONIST))],
+    current_user: Annotated[User, Depends(require_roles(*SCHEDULE_MANAGE_ROLES))],
 ) -> DoctorSchedule:
+    repo = ScheduleRepository(db)
+    schedule = await repo.get_by_id(schedule_id)
+    if not schedule:
+        raise NotFoundError("Смена не найдена")
+    await ensure_doctor_clinic_access(db, current_user, schedule.doctor_id)
     service = ScheduleService(db)
     return await service.update_schedule(schedule_id, data)
 
@@ -78,8 +102,13 @@ async def update_schedule(
 async def delete_schedule(
     schedule_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_roles(RoleEnum.RECEPTIONIST))],
+    current_user: Annotated[User, Depends(require_roles(*SCHEDULE_MANAGE_ROLES))],
 ) -> StatusResponse:
+    repo = ScheduleRepository(db)
+    schedule = await repo.get_by_id(schedule_id)
+    if not schedule:
+        raise NotFoundError("Смена не найдена")
+    await ensure_doctor_clinic_access(db, current_user, schedule.doctor_id)
     service = ScheduleService(db)
     await service.delete_schedule(schedule_id)
     return StatusResponse(message="Смена удалена")
@@ -95,8 +124,9 @@ async def delete_schedule(
 async def create_time_off(
     data: TimeOffCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_roles(RoleEnum.RECEPTIONIST))],
+    current_user: Annotated[User, Depends(require_roles(*SCHEDULE_MANAGE_ROLES))],
 ) -> TimeOff:
+    await ensure_doctor_clinic_access(db, current_user, data.doctor_id)
     service = ScheduleService(db)
     return await service.create_time_off(data)
 
@@ -104,13 +134,25 @@ async def create_time_off(
 @router.get(
     "/time-off/{doctor_id}",
     response_model=list[TimeOffResponse],
-    summary="Список периодов отсутствия врача",
+    summary="Список периодов отсутствия врача (персонал)",
 )
 async def list_time_off(
     doctor_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[
+        User,
+        Depends(
+            require_roles(
+                RoleEnum.RECEPTIONIST,
+                RoleEnum.CLINIC_ADMIN,
+                RoleEnum.HEAD_DOCTOR,
+                RoleEnum.DOCTOR,
+                RoleEnum.NURSE,
+            )
+        ),
+    ],
 ) -> list[TimeOff]:
+    await ensure_doctor_clinic_access(db, current_user, doctor_id)
     repo = ScheduleRepository(db)
     return await repo.list_time_off(doctor_id)
 
@@ -123,8 +165,12 @@ async def list_time_off(
 async def delete_time_off(
     time_off_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_roles(RoleEnum.RECEPTIONIST))],
+    current_user: Annotated[User, Depends(require_roles(*SCHEDULE_MANAGE_ROLES))],
 ) -> StatusResponse:
+    time_off = await db.get(TimeOff, time_off_id)
+    if not time_off:
+        raise NotFoundError("Период отсутствия не найден")
+    await ensure_doctor_clinic_access(db, current_user, time_off.doctor_id)
     service = ScheduleService(db)
     await service.delete_time_off(time_off_id)
     return StatusResponse(message="Период отсутствия удалён")
@@ -139,17 +185,7 @@ async def delete_time_off(
 async def get_doctor_day(
     doctor_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[
-        User,
-        Depends(
-            require_roles(
-                RoleEnum.RECEPTIONIST,
-                RoleEnum.DOCTOR,
-                RoleEnum.NURSE,
-                RoleEnum.PATIENT,
-            )
-        ),
-    ],
+    _: Annotated[User, Depends(require_roles(*SLOT_VIEW_ROLES))],
     on_date: date = Query(..., alias="date", description="Дата в формате ГГГГ-ММ-ДД"),
     slot_minutes: int = Query(
         DEFAULT_APPOINTMENT_DURATION_MINUTES,

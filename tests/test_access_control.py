@@ -9,13 +9,15 @@
 """
 
 import unittest
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from app.api.deps import (
     FINANCE_ROLES,
     MEDICAL_STAFF_ROLES,
     ensure_appointment_access,
+    ensure_doctor_clinic_access,
+    ensure_patient_admin_access,
     is_medical_staff,
 )
 from app.core.exceptions import PermissionDeniedError
@@ -25,7 +27,8 @@ from app.models.enums import PaymentStatus, RoleEnum
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
-def _make_user(    user_id: int,
+def _make_user(
+    user_id: int,
     role: RoleEnum,
     *,
     patient_id: int | None = None,
@@ -93,7 +96,7 @@ class TestAppointmentAccess(unittest.IsolatedAsyncioTestCase):
         # Свой приём
         await ensure_appointment_access(
             patient, appointment_doctor_id=1, appointment_patient_id=500
-        )        # Чужой приём
+        )  # Чужой приём
         with self.assertRaises(PermissionDeniedError):
             await ensure_appointment_access(
                 patient, appointment_doctor_id=1, appointment_patient_id=999
@@ -129,6 +132,7 @@ class TestFinanceGuard(unittest.IsolatedAsyncioTestCase):
     async def test_doctor_denied_finance(self) -> None:
         self.assertNotIn(RoleEnum.DOCTOR, FINANCE_ROLES)
         self.assertNotIn(RoleEnum.NURSE, FINANCE_ROLES)
+
 
 class TestInvoiceVisibility(unittest.IsolatedAsyncioTestCase):
     """Проверяет логику видимости счёта, повторяя правила эндпоинта без HTTP."""
@@ -171,18 +175,15 @@ class TestInvoiceVisibility(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _can_view(user: User, invoice_patient_id: int) -> bool:
         """Повторяет правило доступа эндпоинта GET /billing/invoices/{id}."""
-        finance_roles = (
+        if user.has_any_role(
             RoleEnum.ACCOUNTANT,
             RoleEnum.RECEPTIONIST,
             RoleEnum.SUPER_ADMIN,
             RoleEnum.HEAD_DOCTOR,
-        )
-        if user.role in finance_roles:
+        ):
             return True
-        if user.role == RoleEnum.PATIENT:
-            return bool(
-                user.patient_profile and invoice_patient_id == user.patient_profile.id
-            )
+        if user.has_role(RoleEnum.PATIENT):
+            return bool(user.patient_profile and invoice_patient_id == user.patient_profile.id)
         return False
 
     async def test_finance_can_view_any_invoice(self) -> None:
@@ -247,6 +248,7 @@ class TestCrossClinicMedicalAccess(unittest.IsolatedAsyncioTestCase):
             # Карта существует и доступна (в реальности — врачу любой клиники сети)
             record = await PatientService(session).get_patient_card(patient.id)
             self.assertIsNotNone(record)
+
     async def asyncTearDown(self) -> None:
         await self.engine.dispose()
 
@@ -254,9 +256,190 @@ class TestCrossClinicMedicalAccess(unittest.IsolatedAsyncioTestCase):
         """Врач клиники Б считается медперсоналом и видит карту пациента клиники А."""
         doctor_b = _make_user(100, RoleEnum.DOCTOR)
         self.assertTrue(is_medical_staff(doctor_b))
-        self.assertIn(doctor_b.role, MEDICAL_STAFF_ROLES)
+        self.assertTrue(doctor_b.has_role(RoleEnum.DOCTOR))
         self.assertTrue(is_medical_staff(doctor_b))
 
+
+class TestPatientAdminAccess(unittest.IsolatedAsyncioTestCase):
+    """Админ-доступ к карте: по приёмам + клиника регистрации (created_by_clinic_id)."""
+
+    async def asyncSetUp(self) -> None:
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        self.session_factory = async_sessionmaker(
+            self.engine, class_=AsyncSession, expire_on_commit=False
+        )
+
+        async with self.session_factory() as session:
+            clinic_a = Clinic(name="Клиника А", code="A", address="А", phone="+70000000001")
+            clinic_b = Clinic(name="Клиника Б", code="B", address="Б", phone="+70000000002")
+            session.add_all([clinic_a, clinic_b])
+            await session.commit()
+            self.clinic_a_id = clinic_a.id
+            self.clinic_b_id = clinic_b.id
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+
+    def _staff(self, user_id: int, role: RoleEnum, clinic_id: int) -> User:
+        return User(
+            id=user_id,
+            clinic_id=clinic_id,
+            email=f"u{user_id}@medic.local",
+            phone=f"+7000000{user_id:04d}",
+            hashed_password="x",
+            role=role,
+            first_name="Имя",
+            last_name="Фамилия",
+            is_active=True,
+        )
+
+    async def _make_patient(self, session: AsyncSession, clinic_id: int | None) -> Patient:
+        patient = Patient(
+            first_name="Пац",
+            last_name="Пациентов",
+            passport_series="1234",
+            passport_number="567890",
+            birth_date=date(1990, 1, 1),
+            gender="M",
+            created_by_clinic_id=clinic_id,
+        )
+        session.add(patient)
+        await session.commit()
+        return patient
+
+    async def test_super_admin_any_card(self) -> None:
+        """SA имеет доступ к любой карте сети."""
+        async with self.session_factory() as session:
+            patient = await self._make_patient(session, self.clinic_a_id)
+            sa = self._staff(1, RoleEnum.SUPER_ADMIN, self.clinic_b_id)
+            await ensure_patient_admin_access(session, sa, patient.id)  # не бросает
+
+    async def test_card_without_appointments_owned_by_creator_clinic(self) -> None:
+        """Карта без приёмов: доступ у клиники, чей сотрудник её завёл."""
+        async with self.session_factory() as session:
+            patient = await self._make_patient(session, self.clinic_a_id)
+            receptionist_a = self._staff(2, RoleEnum.RECEPTIONIST, self.clinic_a_id)
+            await ensure_patient_admin_access(session, receptionist_a, patient.id)
+
+    async def test_card_without_appointments_denied_to_other_clinic(self) -> None:
+        """Карта без приёмов, заведённая в А: ресепшен Б получает отказ."""
+        async with self.session_factory() as session:
+            patient = await self._make_patient(session, self.clinic_a_id)
+            receptionist_b = self._staff(3, RoleEnum.RECEPTIONIST, self.clinic_b_id)
+            with self.assertRaises(PermissionDeniedError):
+                await ensure_patient_admin_access(session, receptionist_b, patient.id)
+
+    async def test_card_with_appointment_in_own_clinic_allowed(self) -> None:
+        """Есть приём в клинике сотрудника — доступ разрешён (даже если карта заведена в другой)."""
+        from app.models.entities import Appointment
+        from app.models.enums import AppointmentStatus
+
+        async with self.session_factory() as session:
+            patient = await self._make_patient(session, self.clinic_a_id)
+            appt = Appointment(
+                clinic_id=self.clinic_b_id,
+                patient_id=patient.id,
+                doctor_id=99,
+                scheduled_at=datetime.now(UTC),
+                duration_minutes=30,
+                status=AppointmentStatus.SCHEDULED,
+            )
+            session.add(appt)
+            await session.commit()
+
+            receptionist_b = self._staff(4, RoleEnum.RECEPTIONIST, self.clinic_b_id)
+            await ensure_patient_admin_access(session, receptionist_b, patient.id)
+
+    async def test_card_with_appointment_in_other_clinic_denied(self) -> None:
+        """Приём есть, но в чужой клинике — доступ запрещён."""
+        from app.models.entities import Appointment
+        from app.models.enums import AppointmentStatus
+
+        async with self.session_factory() as session:
+            patient = await self._make_patient(session, self.clinic_a_id)
+            appt = Appointment(
+                clinic_id=self.clinic_a_id,
+                patient_id=patient.id,
+                doctor_id=99,
+                scheduled_at=datetime.now(UTC),
+                duration_minutes=30,
+                status=AppointmentStatus.SCHEDULED,
+            )
+            session.add(appt)
+            await session.commit()
+
+            receptionist_b = self._staff(5, RoleEnum.RECEPTIONIST, self.clinic_b_id)
+            with self.assertRaises(PermissionDeniedError):
+                await ensure_patient_admin_access(session, receptionist_b, patient.id)
+
+
+class TestDoctorClinicAccess(unittest.IsolatedAsyncioTestCase):
+    """Управление расписанием врача: только врач своей клиники (кроме SA)."""
+
+    async def asyncSetUp(self) -> None:
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        self.session_factory = async_sessionmaker(
+            self.engine, class_=AsyncSession, expire_on_commit=False
+        )
+
+        async with self.session_factory() as session:
+            clinic_a = Clinic(name="Клиника А", code="A", address="А", phone="+70000000001")
+            clinic_b = Clinic(name="Клиника Б", code="B", address="Б", phone="+70000000002")
+            session.add_all([clinic_a, clinic_b])
+            await session.commit()
+            self.clinic_a_id = clinic_a.id
+            self.clinic_b_id = clinic_b.id
+
+            doctor_a = User(
+                clinic_id=self.clinic_a_id,
+                email="doc_a@medic.local",
+                phone="+70000000010",
+                hashed_password="x",
+                role=RoleEnum.DOCTOR,
+                first_name="Врач",
+                last_name="А",
+                is_active=True,
+            )
+            session.add(doctor_a)
+            await session.commit()
+            self.doctor_a_id = doctor_a.id
+
+    async def asyncTearDown(self) -> None:
+        await self.engine.dispose()
+
+    def _staff(self, user_id: int, role: RoleEnum, clinic_id: int) -> User:
+        return User(
+            id=user_id,
+            clinic_id=clinic_id,
+            email=f"u{user_id}@medic.local",
+            phone=f"+7000000{user_id:04d}",
+            hashed_password="x",
+            role=role,
+            first_name="Имя",
+            last_name="Фамилия",
+            is_active=True,
+        )
+
+    async def test_admin_own_clinic_doctor_allowed(self) -> None:
+        async with self.session_factory() as session:
+            admin_a = self._staff(1, RoleEnum.CLINIC_ADMIN, self.clinic_a_id)
+            await ensure_doctor_clinic_access(session, admin_a, self.doctor_a_id)
+
+    async def test_admin_other_clinic_doctor_denied(self) -> None:
+        async with self.session_factory() as session:
+            admin_b = self._staff(2, RoleEnum.CLINIC_ADMIN, self.clinic_b_id)
+            with self.assertRaises(PermissionDeniedError):
+                await ensure_doctor_clinic_access(session, admin_b, self.doctor_a_id)
+
+    async def test_super_admin_any_doctor_allowed(self) -> None:
+        async with self.session_factory() as session:
+            sa = self._staff(3, RoleEnum.SUPER_ADMIN, self.clinic_b_id)
+            await ensure_doctor_clinic_access(session, sa, self.doctor_a_id)
+
+
 if __name__ == "__main__":
-    unittest.main()
     unittest.main()

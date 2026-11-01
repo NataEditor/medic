@@ -113,9 +113,7 @@ class TestScheduleService(unittest.IsolatedAsyncioTestCase):
         async with self.session_factory() as session:
             service = ScheduleService(session)
             some_date = date(2026, 6, 3)  # среда
-            day = await service.get_doctor_day_schedule(
-                self.doctor_id, some_date, slot_minutes=30
-            )
+            day = await service.get_doctor_day_schedule(self.doctor_id, some_date, slot_minutes=30)
             self.assertFalse(day.is_working_day)
             self.assertEqual(day.free_slots, [])
 

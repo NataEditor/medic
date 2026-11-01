@@ -9,6 +9,7 @@ from app.core.exceptions import (
     NotFoundError,
     PermissionDeniedError,
 )
+from app.core.logging import logger
 from app.models.entities import Invoice, Payment, Service, User
 from app.models.enums import PaymentStatus, RoleEnum
 from app.repositories.base import BaseRepository
@@ -74,7 +75,15 @@ class BillingService:
             method=data.method,
             cashier_id=cashier.id,
         )
-        return await self.billing_repo.add_payment(payment)
+        created = await self.billing_repo.add_payment(payment)
+        logger.info(
+            "Принята оплата: счёт={} сумма={} способ={} кассир={}",
+            data.invoice_id,
+            data.amount,
+            data.method.value,
+            cashier.id,
+        )
+        return created
 
     async def refund_payment(
         self,
@@ -135,16 +144,29 @@ class BillingService:
         end_date: date,
         clinic_id: int | None = None,
     ) -> ClinicFinancialReport:
-        """Генерация финансового отчёта для бухгалтерии и главврача."""
-        if not accountant.has_any_role(RoleEnum.ACCOUNTANT, RoleEnum.HEAD_DOCTOR):
+        """Генерация финансового отчёта для бухгалтерии, главврача и SA.
+
+        Проверка ролей здесь дублирует require_roles в роутере, но нужна:
+        сервис вызывается и из других мест. SUPER_ADMIN обязателен —
+        иначе владелец платформы получает 403 на собственном отчёте.
+        """
+        if not accountant.has_any_role(
+            RoleEnum.ACCOUNTANT,
+            RoleEnum.HEAD_DOCTOR,
+            RoleEnum.SUPER_ADMIN,
+        ):
             from app.core.exceptions import PermissionDeniedError
 
-            raise PermissionDeniedError("Доступ к финотчётам имеет только бухгалтерия/главврач")
-        # Если не главврач — бухгалтер видит только свою клинику
-        target_clinic = clinic_id
-        if accountant.has_role(RoleEnum.ACCOUNTANT):
-            target_clinic = accountant.clinic_id
+            raise PermissionDeniedError(
+                "Доступ к финотчётам имеет только бухгалтерия, главврач и SA"
+            )
 
+        # Бухгалтерия ограничена своей клиникой; главврач и SA видят сеть
+        target_clinic = clinic_id
+        if accountant.has_role(RoleEnum.ACCOUNTANT) and not accountant.has_role(
+            RoleEnum.SUPER_ADMIN
+        ):
+            target_clinic = accountant.clinic_id
         summary = await self.billing_repo.get_financial_summary(
             start_date=start_date,
             end_date=end_date,

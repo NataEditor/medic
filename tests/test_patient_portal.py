@@ -53,9 +53,7 @@ class TestPatientPortal(unittest.IsolatedAsyncioTestCase):
     async def test_grant_access_creates_user_and_flags_temp_password(self) -> None:
         async with self.session_factory() as session:
             service = PatientService(session)
-            temp_password, user = await service.grant_portal_access(
-                self.patient_id, "+79995554433"
-            )
+            temp_password, user = await service.grant_portal_access(self.patient_id, "+79995554433")
             await session.commit()
 
             self.assertEqual(user.role, RoleEnum.PATIENT)

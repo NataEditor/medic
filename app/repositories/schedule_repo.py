@@ -16,6 +16,7 @@ BUSY_APPOINTMENT_STATUSES: tuple[AppointmentStatus, ...] = (
     AppointmentStatus.COMPLETED,
 )
 
+
 class ScheduleRepository(BaseRepository[DoctorSchedule]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(DoctorSchedule, session)

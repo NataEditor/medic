@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
+from app.core.logging import logger
 from app.core.security import hash_password
 from app.models.entities import User
 from app.models.enums import RoleEnum
@@ -70,6 +71,12 @@ class AdminService:
             entity_id=created.id,
             changes=f'{{"email": "{created.email}", "roles": "{created.roles}"}}',
         )
+        logger.info(
+            "Создан администратор платформы id={} email={} (создал={})",
+            created.id,
+            created.email,
+            actor.id,
+        )
         return created
 
     async def delete_user(self, actor: User, target_user_id: int) -> None:
@@ -101,6 +108,12 @@ class AdminService:
             entity_id=target_user_id,
             changes=f'{{"email": "{target.email}"}}',
         )
+        logger.info(
+            "Удалён пользователь id={} email={} (удалил={})",
+            target_user_id,
+            target.email,
+            actor.id,
+        )
 
     async def deactivate_user(self, actor: User, target_user_id: int) -> User:
         """Блокировка учётной записи сотрудника.
@@ -128,5 +141,11 @@ class AdminService:
             entity_name="user",
             entity_id=target_user_id,
             changes=f'{{"email": "{target.email}", "is_active": false}}',
+        )
+        logger.info(
+            "Заблокирован пользователь id={} email={} (заблокировал={})",
+            target_user_id,
+            target.email,
+            actor.id,
         )
         return target

@@ -1,8 +1,8 @@
 """init schema
 
-Revision ID: 3b64cf658e37
+Revision ID: 8dd04b5e710e
 Revises: 
-Create Date: 2026-10-18 20:53:07.809416
+Create Date: 2026-10-25 14:43:26.528780
 
 """
 from typing import Sequence, Union
@@ -10,9 +10,10 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from app.models.entities import StringListType
 
 # revision identifiers, used by Alembic.
-revision: str = '3b64cf658e37'
+revision: str = '8dd04b5e710e'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -53,7 +54,7 @@ def upgrade() -> None:
     sa.Column('email', sa.String(length=255), nullable=False),
     sa.Column('phone', sa.String(length=50), nullable=False),
     sa.Column('hashed_password', sa.String(length=255), nullable=False),
-    sa.Column('role', sa.Enum('SUPER_ADMIN', 'PATIENT', 'DOCTOR', 'HEAD_DOCTOR', 'NURSE', 'RECEPTIONIST', 'ACCOUNTANT', name='user_role_enum', native_enum=False), nullable=False),
+    sa.Column('roles', StringListType(), nullable=False),
     sa.Column('first_name', sa.String(length=100), nullable=False),
     sa.Column('last_name', sa.String(length=100), nullable=False),
     sa.Column('middle_name', sa.String(length=100), nullable=True),
@@ -68,7 +69,6 @@ def upgrade() -> None:
     op.create_index(op.f('users_clinic_id_idx'), 'users', ['clinic_id'], unique=False)
     op.create_index(op.f('users_email_idx'), 'users', ['email'], unique=True)
     op.create_index(op.f('users_phone_idx'), 'users', ['phone'], unique=True)
-    op.create_index(op.f('users_role_idx'), 'users', ['role'], unique=False)
     op.create_table('audit_logs',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=True),
@@ -129,6 +129,10 @@ def upgrade() -> None:
     sa.Column('passport_number', sa.String(length=6), nullable=False),
     sa.Column('passport_scan_path', sa.String(length=500), nullable=True),
     sa.Column('passport_scan_uploaded_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('status', sa.Enum('DRAFT', 'ACTIVE', 'ARCHIVED', 'ANONYMIZED', name='patient_status_enum', native_enum=False), nullable=False),
+    sa.Column('activated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('archived_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('anonymized_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('birth_date', sa.Date(), nullable=False),
     sa.Column('gender', sa.String(length=10), nullable=False),
     sa.Column('phone', sa.String(length=50), nullable=True),
@@ -147,6 +151,7 @@ def upgrade() -> None:
     op.create_index(op.f('patients_passport_series_idx'), 'patients', ['passport_series'], unique=False)
     op.create_index(op.f('patients_phone_idx'), 'patients', ['phone'], unique=False)
     op.create_index(op.f('patients_snils_idx'), 'patients', ['snils'], unique=True)
+    op.create_index(op.f('patients_status_idx'), 'patients', ['status'], unique=False)
     op.create_table('time_offs',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('doctor_id', sa.Integer(), nullable=False),
@@ -161,6 +166,24 @@ def upgrade() -> None:
     op.create_index(op.f('time_offs_doctor_id_idx'), 'time_offs', ['doctor_id'], unique=False)
     op.create_index(op.f('time_offs_end_date_idx'), 'time_offs', ['end_date'], unique=False)
     op.create_index(op.f('time_offs_start_date_idx'), 'time_offs', ['start_date'], unique=False)
+    op.create_table('anonymization_requests',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('patient_id', sa.Integer(), nullable=False),
+    sa.Column('requested_by_id', sa.Integer(), nullable=False),
+    sa.Column('reviewed_by_id', sa.Integer(), nullable=True),
+    sa.Column('reason', sa.Text(), nullable=False),
+    sa.Column('status', sa.Enum('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', name='anonymization_request_status_enum', native_enum=False), nullable=False),
+    sa.Column('review_comment', sa.Text(), nullable=True),
+    sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], name=op.f('anonymization_requests_patient_id_fkey'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['requested_by_id'], ['users.id'], name=op.f('anonymization_requests_requested_by_id_fkey'), ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['reviewed_by_id'], ['users.id'], name=op.f('anonymization_requests_reviewed_by_id_fkey'), ondelete='SET NULL'),
+    sa.PrimaryKeyConstraint('id', name=op.f('anonymization_requests_pkey'))
+    )
+    op.create_index(op.f('anonymization_requests_patient_id_idx'), 'anonymization_requests', ['patient_id'], unique=False)
+    op.create_index(op.f('anonymization_requests_status_idx'), 'anonymization_requests', ['status'], unique=False)
     op.create_table('appointments',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('clinic_id', sa.Integer(), nullable=False),
@@ -201,6 +224,26 @@ def upgrade() -> None:
     sa.UniqueConstraint('patient_id', name=op.f('medical_records_patient_id_key'))
     )
     op.create_index(op.f('medical_records_record_number_idx'), 'medical_records', ['record_number'], unique=True)
+    op.create_table('patient_relatives',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('patient_id', sa.Integer(), nullable=False),
+    sa.Column('relative_id', sa.Integer(), nullable=False),
+    sa.Column('relation', sa.String(length=50), nullable=False),
+    sa.Column('status', sa.Enum('PENDING', 'CONFIRMED', 'REJECTED', name='patient_relative_status_enum', native_enum=False), nullable=False),
+    sa.Column('confirmed_by_id', sa.Integer(), nullable=True),
+    sa.Column('confirmed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['confirmed_by_id'], ['users.id'], name=op.f('patient_relatives_confirmed_by_id_fkey'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], name=op.f('patient_relatives_patient_id_fkey'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['relative_id'], ['patients.id'], name=op.f('patient_relatives_relative_id_fkey'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('patient_relatives_pkey')),
+    sa.UniqueConstraint('patient_id', 'relative_id', name='uq_patient_relative_pair')
+    )
+    op.create_index(op.f('patient_relatives_patient_id_idx'), 'patient_relatives', ['patient_id'], unique=False)
+    op.create_index(op.f('patient_relatives_relative_id_idx'), 'patient_relatives', ['relative_id'], unique=False)
+    op.create_index(op.f('patient_relatives_status_idx'), 'patient_relatives', ['status'], unique=False)
     op.create_table('assignments',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('record_id', sa.Integer(), nullable=False),
@@ -209,6 +252,7 @@ def upgrade() -> None:
     sa.Column('service_id', sa.Integer(), nullable=True),
     sa.Column('type', sa.Enum('MEDICATION', 'PROCEDURE', 'ANALYSIS', 'DIAGNOSTIC', name='assignment_type_enum', native_enum=False), nullable=False),
     sa.Column('title', sa.String(length=255), nullable=False),
+    sa.Column('procedure_type', sa.String(length=100), nullable=True),
     sa.Column('dosage', sa.String(length=255), nullable=True),
     sa.Column('frequency', sa.String(length=255), nullable=True),
     sa.Column('duration_days', sa.Integer(), nullable=True),
@@ -223,27 +267,35 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id', name=op.f('assignments_pkey'))
     )
     op.create_index(op.f('assignments_clinic_id_idx'), 'assignments', ['clinic_id'], unique=False)
+    op.create_index(op.f('assignments_procedure_type_idx'), 'assignments', ['procedure_type'], unique=False)
     op.create_index(op.f('assignments_record_id_idx'), 'assignments', ['record_id'], unique=False)
     op.create_index(op.f('assignments_status_idx'), 'assignments', ['status'], unique=False)
-    op.create_table('medical_record_entries',
+    op.create_table('encounters',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('record_id', sa.Integer(), nullable=False),
-    sa.Column('doctor_id', sa.Integer(), nullable=False),
     sa.Column('appointment_id', sa.Integer(), nullable=True),
-    sa.Column('complaints', sa.Text(), nullable=False),
-    sa.Column('anamnesis', sa.Text(), nullable=True),
-    sa.Column('objective_status', sa.Text(), nullable=True),
-    sa.Column('diagnosis_icd10', sa.String(length=20), nullable=False),
-    sa.Column('diagnosis_text', sa.Text(), nullable=False),
-    sa.Column('treatment_plan', sa.Text(), nullable=True),
+    sa.Column('patient_id', sa.Integer(), nullable=False),
+    sa.Column('doctor_id', sa.Integer(), nullable=False),
+    sa.Column('clinic_id', sa.Integer(), nullable=False),
+    sa.Column('record_id', sa.Integer(), nullable=False),
+    sa.Column('status', sa.Enum('OPEN', 'CLOSED', 'CANCELLED', name='encounter_status_enum', native_enum=False), nullable=False),
+    sa.Column('opened_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('closed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('chief_complaint', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['appointment_id'], ['appointments.id'], name=op.f('medical_record_entries_appointment_id_fkey'), ondelete='SET NULL'),
-    sa.ForeignKeyConstraint(['doctor_id'], ['users.id'], name=op.f('medical_record_entries_doctor_id_fkey')),
-    sa.ForeignKeyConstraint(['record_id'], ['medical_records.id'], name=op.f('medical_record_entries_record_id_fkey'), ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id', name=op.f('medical_record_entries_pkey'))
+    sa.ForeignKeyConstraint(['appointment_id'], ['appointments.id'], name=op.f('encounters_appointment_id_fkey'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['clinic_id'], ['clinics.id'], name=op.f('encounters_clinic_id_fkey'), ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['doctor_id'], ['users.id'], name=op.f('encounters_doctor_id_fkey'), ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['patient_id'], ['patients.id'], name=op.f('encounters_patient_id_fkey'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['record_id'], ['medical_records.id'], name=op.f('encounters_record_id_fkey'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('encounters_pkey')),
+    sa.UniqueConstraint('appointment_id', name=op.f('encounters_appointment_id_key'))
     )
-    op.create_index(op.f('medical_record_entries_record_id_idx'), 'medical_record_entries', ['record_id'], unique=False)
+    op.create_index(op.f('encounters_clinic_id_idx'), 'encounters', ['clinic_id'], unique=False)
+    op.create_index(op.f('encounters_doctor_id_idx'), 'encounters', ['doctor_id'], unique=False)
+    op.create_index(op.f('encounters_patient_id_idx'), 'encounters', ['patient_id'], unique=False)
+    op.create_index(op.f('encounters_record_id_idx'), 'encounters', ['record_id'], unique=False)
+    op.create_index(op.f('encounters_status_idx'), 'encounters', ['status'], unique=False)
     op.create_table('analysis_results',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('assignment_id', sa.Integer(), nullable=False),
@@ -283,45 +335,114 @@ def upgrade() -> None:
     op.create_index(op.f('invoices_clinic_id_idx'), 'invoices', ['clinic_id'], unique=False)
     op.create_index(op.f('invoices_patient_id_idx'), 'invoices', ['patient_id'], unique=False)
     op.create_index(op.f('invoices_status_idx'), 'invoices', ['status'], unique=False)
-    op.create_table('procedure_executions',
+    op.create_table('medical_record_entries',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('assignment_id', sa.Integer(), nullable=False),
-    sa.Column('nurse_id', sa.Integer(), nullable=False),
-    sa.Column('executed_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('status', sa.Enum('COMPLETED', 'REFUSED', 'CONTRAINDICATED', name='procedure_execution_status_enum', native_enum=False), nullable=False),
-    sa.Column('materials_used', sa.Text(), nullable=True),
-    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('record_id', sa.Integer(), nullable=False),
+    sa.Column('doctor_id', sa.Integer(), nullable=False),
+    sa.Column('appointment_id', sa.Integer(), nullable=True),
+    sa.Column('encounter_id', sa.Integer(), nullable=True),
+    sa.Column('complaints', sa.Text(), nullable=False),
+    sa.Column('anamnesis', sa.Text(), nullable=True),
+    sa.Column('objective_status', sa.Text(), nullable=True),
+    sa.Column('diagnosis_icd10', sa.String(length=20), nullable=False),
+    sa.Column('diagnosis_text', sa.Text(), nullable=False),
+    sa.Column('treatment_plan', sa.Text(), nullable=True),
+    sa.Column('corrects_entry_id', sa.Integer(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['assignment_id'], ['assignments.id'], name=op.f('procedure_executions_assignment_id_fkey'), ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['nurse_id'], ['users.id'], name=op.f('procedure_executions_nurse_id_fkey'), ondelete='RESTRICT'),
-    sa.PrimaryKeyConstraint('id', name=op.f('procedure_executions_pkey'))
+    sa.ForeignKeyConstraint(['appointment_id'], ['appointments.id'], name=op.f('medical_record_entries_appointment_id_fkey'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['corrects_entry_id'], ['medical_record_entries.id'], name=op.f('medical_record_entries_corrects_entry_id_fkey'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['doctor_id'], ['users.id'], name=op.f('medical_record_entries_doctor_id_fkey')),
+    sa.ForeignKeyConstraint(['encounter_id'], ['encounters.id'], name=op.f('medical_record_entries_encounter_id_fkey'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['record_id'], ['medical_records.id'], name=op.f('medical_record_entries_record_id_fkey'), ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id', name=op.f('medical_record_entries_pkey'))
     )
-    op.create_index(op.f('procedure_executions_assignment_id_idx'), 'procedure_executions', ['assignment_id'], unique=False)
-    op.create_index(op.f('procedure_executions_nurse_id_idx'), 'procedure_executions', ['nurse_id'], unique=False)
+    op.create_index(op.f('medical_record_entries_encounter_id_idx'), 'medical_record_entries', ['encounter_id'], unique=False)
+    op.create_index(op.f('medical_record_entries_record_id_idx'), 'medical_record_entries', ['record_id'], unique=False)
     op.create_table('payments',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('invoice_id', sa.Integer(), nullable=False),
     sa.Column('amount', sa.Numeric(precision=10, scale=2), nullable=False),
     sa.Column('method', sa.Enum('CASH', 'CARD', 'SBP', 'INSURANCE', name='payment_method_enum', native_enum=False), nullable=False),
     sa.Column('cashier_id', sa.Integer(), nullable=False),
+    sa.Column('reversal_of_id', sa.Integer(), nullable=True),
+    sa.Column('reversal_reason', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['cashier_id'], ['users.id'], name=op.f('payments_cashier_id_fkey'), ondelete='RESTRICT'),
     sa.ForeignKeyConstraint(['invoice_id'], ['invoices.id'], name=op.f('payments_invoice_id_fkey'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['reversal_of_id'], ['payments.id'], name=op.f('payments_reversal_of_id_fkey'), ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id', name=op.f('payments_pkey'))
     )
     op.create_index(op.f('payments_invoice_id_idx'), 'payments', ['invoice_id'], unique=False)
+    op.create_index(op.f('payments_reversal_of_id_idx'), 'payments', ['reversal_of_id'], unique=False)
+    op.create_table('procedure_executions',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('assignment_id', sa.Integer(), nullable=False),
+    sa.Column('nurse_id', sa.Integer(), nullable=False),
+    sa.Column('performed_by_id', sa.Integer(), nullable=True),
+    sa.Column('executed_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('performed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('status', sa.Enum('COMPLETED', 'REFUSED', 'CONTRAINDICATED', name='procedure_execution_status_enum', native_enum=False), nullable=False),
+    sa.Column('materials_used', sa.Text(), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('invoice_id', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['assignment_id'], ['assignments.id'], name=op.f('procedure_executions_assignment_id_fkey'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['invoice_id'], ['invoices.id'], name=op.f('procedure_executions_invoice_id_fkey'), ondelete='SET NULL'),
+    sa.ForeignKeyConstraint(['nurse_id'], ['users.id'], name=op.f('procedure_executions_nurse_id_fkey'), ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['performed_by_id'], ['users.id'], name=op.f('procedure_executions_performed_by_id_fkey'), ondelete='SET NULL'),
+    sa.PrimaryKeyConstraint('id', name=op.f('procedure_executions_pkey'))
+    )
+    op.create_index(op.f('procedure_executions_assignment_id_idx'), 'procedure_executions', ['assignment_id'], unique=False)
+    op.create_index(op.f('procedure_executions_invoice_id_idx'), 'procedure_executions', ['invoice_id'], unique=False)
+    op.create_index(op.f('procedure_executions_nurse_id_idx'), 'procedure_executions', ['nurse_id'], unique=False)
+    op.create_index(op.f('procedure_executions_performed_at_idx'), 'procedure_executions', ['performed_at'], unique=False)
+    op.create_index(op.f('procedure_executions_performed_by_id_idx'), 'procedure_executions', ['performed_by_id'], unique=False)
+    op.create_table('refund_requests',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('payment_id', sa.Integer(), nullable=False),
+    sa.Column('invoice_id', sa.Integer(), nullable=False),
+    sa.Column('requested_by_id', sa.Integer(), nullable=False),
+    sa.Column('reviewed_by_id', sa.Integer(), nullable=True),
+    sa.Column('amount', sa.Numeric(precision=10, scale=2), nullable=False),
+    sa.Column('reason', sa.Text(), nullable=False),
+    sa.Column('status', sa.Enum('PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', name='refund_request_status_enum', native_enum=False), nullable=False),
+    sa.Column('review_comment', sa.Text(), nullable=True),
+    sa.Column('reviewed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.ForeignKeyConstraint(['invoice_id'], ['invoices.id'], name=op.f('refund_requests_invoice_id_fkey'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['payment_id'], ['payments.id'], name=op.f('refund_requests_payment_id_fkey'), ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['requested_by_id'], ['users.id'], name=op.f('refund_requests_requested_by_id_fkey'), ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['reviewed_by_id'], ['users.id'], name=op.f('refund_requests_reviewed_by_id_fkey'), ondelete='SET NULL'),
+    sa.PrimaryKeyConstraint('id', name=op.f('refund_requests_pkey'))
+    )
+    op.create_index(op.f('refund_requests_invoice_id_idx'), 'refund_requests', ['invoice_id'], unique=False)
+    op.create_index(op.f('refund_requests_payment_id_idx'), 'refund_requests', ['payment_id'], unique=False)
+    op.create_index(op.f('refund_requests_status_idx'), 'refund_requests', ['status'], unique=False)
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
-    op.drop_index(op.f('payments_invoice_id_idx'), table_name='payments')
-    op.drop_table('payments')
+    op.drop_index(op.f('refund_requests_status_idx'), table_name='refund_requests')
+    op.drop_index(op.f('refund_requests_payment_id_idx'), table_name='refund_requests')
+    op.drop_index(op.f('refund_requests_invoice_id_idx'), table_name='refund_requests')
+    op.drop_table('refund_requests')
+    op.drop_index(op.f('procedure_executions_performed_by_id_idx'), table_name='procedure_executions')
+    op.drop_index(op.f('procedure_executions_performed_at_idx'), table_name='procedure_executions')
     op.drop_index(op.f('procedure_executions_nurse_id_idx'), table_name='procedure_executions')
+    op.drop_index(op.f('procedure_executions_invoice_id_idx'), table_name='procedure_executions')
     op.drop_index(op.f('procedure_executions_assignment_id_idx'), table_name='procedure_executions')
     op.drop_table('procedure_executions')
+    op.drop_index(op.f('payments_reversal_of_id_idx'), table_name='payments')
+    op.drop_index(op.f('payments_invoice_id_idx'), table_name='payments')
+    op.drop_table('payments')
+    op.drop_index(op.f('medical_record_entries_record_id_idx'), table_name='medical_record_entries')
+    op.drop_index(op.f('medical_record_entries_encounter_id_idx'), table_name='medical_record_entries')
+    op.drop_table('medical_record_entries')
     op.drop_index(op.f('invoices_status_idx'), table_name='invoices')
     op.drop_index(op.f('invoices_patient_id_idx'), table_name='invoices')
     op.drop_index(op.f('invoices_clinic_id_idx'), table_name='invoices')
@@ -329,12 +450,21 @@ def downgrade() -> None:
     op.drop_index(op.f('analysis_results_patient_id_idx'), table_name='analysis_results')
     op.drop_index(op.f('analysis_results_assignment_id_idx'), table_name='analysis_results')
     op.drop_table('analysis_results')
-    op.drop_index(op.f('medical_record_entries_record_id_idx'), table_name='medical_record_entries')
-    op.drop_table('medical_record_entries')
+    op.drop_index(op.f('encounters_status_idx'), table_name='encounters')
+    op.drop_index(op.f('encounters_record_id_idx'), table_name='encounters')
+    op.drop_index(op.f('encounters_patient_id_idx'), table_name='encounters')
+    op.drop_index(op.f('encounters_doctor_id_idx'), table_name='encounters')
+    op.drop_index(op.f('encounters_clinic_id_idx'), table_name='encounters')
+    op.drop_table('encounters')
     op.drop_index(op.f('assignments_status_idx'), table_name='assignments')
     op.drop_index(op.f('assignments_record_id_idx'), table_name='assignments')
+    op.drop_index(op.f('assignments_procedure_type_idx'), table_name='assignments')
     op.drop_index(op.f('assignments_clinic_id_idx'), table_name='assignments')
     op.drop_table('assignments')
+    op.drop_index(op.f('patient_relatives_status_idx'), table_name='patient_relatives')
+    op.drop_index(op.f('patient_relatives_relative_id_idx'), table_name='patient_relatives')
+    op.drop_index(op.f('patient_relatives_patient_id_idx'), table_name='patient_relatives')
+    op.drop_table('patient_relatives')
     op.drop_index(op.f('medical_records_record_number_idx'), table_name='medical_records')
     op.drop_table('medical_records')
     op.drop_index('ix_appointments_doctor_schedule', table_name='appointments')
@@ -344,10 +474,14 @@ def downgrade() -> None:
     op.drop_index(op.f('appointments_doctor_id_idx'), table_name='appointments')
     op.drop_index(op.f('appointments_clinic_id_idx'), table_name='appointments')
     op.drop_table('appointments')
+    op.drop_index(op.f('anonymization_requests_status_idx'), table_name='anonymization_requests')
+    op.drop_index(op.f('anonymization_requests_patient_id_idx'), table_name='anonymization_requests')
+    op.drop_table('anonymization_requests')
     op.drop_index(op.f('time_offs_start_date_idx'), table_name='time_offs')
     op.drop_index(op.f('time_offs_end_date_idx'), table_name='time_offs')
     op.drop_index(op.f('time_offs_doctor_id_idx'), table_name='time_offs')
     op.drop_table('time_offs')
+    op.drop_index(op.f('patients_status_idx'), table_name='patients')
     op.drop_index(op.f('patients_snils_idx'), table_name='patients')
     op.drop_index(op.f('patients_phone_idx'), table_name='patients')
     op.drop_index(op.f('patients_passport_series_idx'), table_name='patients')
@@ -363,7 +497,6 @@ def downgrade() -> None:
     op.drop_index(op.f('audit_logs_created_at_idx'), table_name='audit_logs')
     op.drop_index(op.f('audit_logs_action_idx'), table_name='audit_logs')
     op.drop_table('audit_logs')
-    op.drop_index(op.f('users_role_idx'), table_name='users')
     op.drop_index(op.f('users_phone_idx'), table_name='users')
     op.drop_index(op.f('users_email_idx'), table_name='users')
     op.drop_index(op.f('users_clinic_id_idx'), table_name='users')

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_roles
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.db.session import get_db
-from app.models.entities import Invoice, Service, User
+from app.models.entities import Appointment, Invoice, Service, User
 from app.models.enums import RefundRequestStatus, RoleEnum
 from app.repositories.base import BaseRepository
 from app.repositories.billing_repo import BillingRepository
@@ -15,7 +15,6 @@ from app.schemas.billing import (
     ClinicFinancialReport,
     InvoiceResponse,
     PaymentCreate,
-    PaymentRefundRequest,
     PaymentResponse,
     RefundRequestCreate,
     RefundRequestResponse,
@@ -29,6 +28,7 @@ from app.services.billing_service import BillingService
 from app.services.refund_service import RefundService
 
 router = APIRouter(prefix="/billing", tags=["Биллинг, касса и бухгалтерия"])
+
 
 # ----- Прайс-лист услуг -----
 @router.get(
@@ -55,6 +55,7 @@ async def list_services(
     filters = [Service.is_active.is_(True)] if only_active else None
     items, _ = await repo.list_paginated(limit=500, filters=filters)
     return items
+
 
 @router.post(
     "/services",
@@ -101,8 +102,9 @@ async def get_invoice(
 ) -> Invoice:
     """Просмотр счёта с разграничением доступа.
 
-    Финансовые роли (бухгалтерия, ресепшен, администраторы) видят любой счёт.
-    Пациент — только свой. Врачи/медсёстры доступа к чужим счетам не имеют.
+    Финансовые роли (бухгалтерия, ресепшен, админ клиники, главврач, SA)
+    видят любой счёт. Пациент — только свой. Врач видит счёт только по
+    своим приёмам (статус оплаты). Медсестра доступа не имеет.
     """
     repo = BillingRepository(db)
     inv = await repo.get_invoice_detailed(invoice_id)
@@ -112,15 +114,25 @@ async def get_invoice(
     finance_roles = (
         RoleEnum.ACCOUNTANT,
         RoleEnum.RECEPTIONIST,
+        RoleEnum.CLINIC_ADMIN,
         RoleEnum.SUPER_ADMIN,
         RoleEnum.HEAD_DOCTOR,
     )
     if current_user.has_any_role(*finance_roles):
         return inv
+
     if current_user.has_role(RoleEnum.PATIENT):
         if current_user.patient_profile and inv.patient_id == current_user.patient_profile.id:
             return inv
         raise PermissionDeniedError("Доступ к чужому счёту запрещён")
+
+    if current_user.has_role(RoleEnum.DOCTOR):
+        # Врачу нужен статус оплаты своих приёмов, чтобы не работать в долг
+        if inv.appointment_id is not None:
+            appointment = await db.get(Appointment, inv.appointment_id)
+            if appointment is not None and appointment.doctor_id == current_user.id:
+                return inv
+        raise PermissionDeniedError("Врач видит счёт только по своим приёмам")
 
     raise PermissionDeniedError("Недостаточно прав для просмотра счёта")
 
@@ -144,28 +156,8 @@ async def pay_invoice(
     return payment
 
 
-@router.post(
-    "/payments/{payment_id}/refund",
-    response_model=PaymentResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Оформить возврат средств по платежу (руководитель/бухгалтерия)",
-)
-async def refund_payment(
-    payment_id: int,
-    data: PaymentRefundRequest,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[
-        User,
-        Depends(require_roles(RoleEnum.ACCOUNTANT)),
-    ],
-) -> PaymentResponse:
-    """Возврат создаёт компенсирующую проводку; исходный платёж не меняется.
-
-    Факт возврата фиксируется в журнале аудита с указанием причины.
-    """
-    service = BillingService(db)
-    refund = await service.refund_payment(current_user, payment_id, data)
-    return refund
+# Прямой возврат удалён: деньги проходят только через заявку и подтверждение
+# бухгалтерией (двойной контроль). См. /refund-requests.
 
 
 # ----- Финансовые отчёты (бухгалтерия и главврач) -----
@@ -224,7 +216,10 @@ async def create_refund_request(
 )
 async def list_refund_requests(
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_roles(RoleEnum.ACCOUNTANT))],
+    _: Annotated[
+        User,
+        Depends(require_roles(RoleEnum.ACCOUNTANT, RoleEnum.SUPER_ADMIN)),
+    ],
     status_filter: RefundRequestStatus | None = Query(None, alias="status"),
 ) -> list[RefundRequestResponse]:
     service = RefundService(db)
@@ -271,7 +266,10 @@ async def reverse_payment(
     payment_id: int,
     data: ReversalCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_roles(RoleEnum.ACCOUNTANT))],
+    current_user: Annotated[
+        User,
+        Depends(require_roles(RoleEnum.ACCOUNTANT, RoleEnum.SUPER_ADMIN)),
+    ],
 ) -> PaymentResponse:
     """Компенсирующая проводка: оригинал не удаляется и не меняется."""
     service = RefundService(db)

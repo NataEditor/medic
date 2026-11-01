@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from pydantic import EmailStr, Field
+from pydantic import Field
 
 from app.schemas.common import ORMModel
+from app.schemas.types import Email
 
 
 class ClinicBase(ORMModel):
@@ -10,7 +11,7 @@ class ClinicBase(ORMModel):
     code: str = Field(..., max_length=50)
     address: str = Field(..., max_length=500)
     phone: str = Field(..., max_length=50)
-    email: EmailStr | None = None
+    email: Email | None = None
     is_active: bool = True
 
 
@@ -22,7 +23,7 @@ class ClinicUpdate(ORMModel):
     name: str | None = None
     address: str | None = None
     phone: str | None = None
-    email: EmailStr | None = None
+    email: Email | None = None
     is_active: bool | None = None
 
 

@@ -63,6 +63,7 @@ class AssignmentCreate(ORMModel):
     duration_days: int | None = Field(None, ge=1, le=365)
     instructions: str | None = None
 
+
 class AssignmentUpdate(ORMModel):
     title: str | None = None
     dosage: str | None = None

@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import EmailStr, Field, field_validator
+from pydantic import Field, field_validator
 
 from app.core.constants import (
     GENDER_REGEX_PATTERN,
@@ -12,6 +12,7 @@ from app.core.constants import (
     SHORT_STRING_LENGTH,
 )
 from app.schemas.common import ORMModel
+from app.schemas.types import Email
 
 
 def _normalize_passport(value: object) -> object:
@@ -55,7 +56,7 @@ class PatientBase(ORMModel):
         max_length=SHORT_STRING_LENGTH,
         description="Телефон для напоминаний (не уникален)",
     )
-    email: EmailStr | None = None
+    email: Email | None = None
     snils: str | None = Field(None, max_length=20)
     oms_number: str | None = Field(None, max_length=30)
     address: str | None = Field(None, max_length=LONG_STRING_LENGTH)
@@ -81,7 +82,7 @@ class PatientUpdate(ORMModel):
     birth_date: date | None = None
     gender: str | None = Field(None, pattern=GENDER_REGEX_PATTERN)
     phone: str | None = None
-    email: EmailStr | None = None
+    email: Email | None = None
     snils: str | None = None
     oms_number: str | None = None
     address: str | None = None
@@ -90,6 +91,19 @@ class PatientUpdate(ORMModel):
     @classmethod
     def normalize_passport(cls, value: object) -> object:
         return _normalize_passport(value)
+
+
+class PatientContactUpdate(ORMModel):
+    """Редактирование пациентом СВОИХ контактов в личном кабинете.
+
+    Пациент не меняет паспорт, ФИО и дату рождения — это документы,
+    которые правит только регистратура по предъявлении паспорта.
+    Доступны лишь контактные данные для связи и напоминаний.
+    """
+
+    phone: str | None = Field(None, max_length=SHORT_STRING_LENGTH)
+    email: Email | None = None
+    address: str | None = Field(None, max_length=LONG_STRING_LENGTH)
 
 
 class PatientResponse(PatientBase):

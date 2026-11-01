@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import BusinessRuleError, NotFoundError, PermissionDeniedError
+from app.core.logging import logger
 from app.models.entities import (
     AnalysisResult,
     Assignment,
@@ -73,6 +74,14 @@ class AssignmentService:
         # Счёт за платное назначение (анализ/процедура/диагностика с ценой в прайсе)
         await self._create_invoice_for_assignment(created, clinic_id)
 
+        logger.info(
+            "Создано назначение id={}: тип={} врач={} карта={} '{}'",
+            created.id,
+            created.type.value,
+            doctor.id,
+            created.record_id,
+            created.title,
+        )
         return created
 
     async def _create_invoice_for_assignment(
@@ -103,6 +112,7 @@ class AssignmentService:
         self.session.add(invoice)
         await self.session.flush()
         return invoice
+
     async def update_assignment(
         self,
         doctor: User,
@@ -122,6 +132,11 @@ class AssignmentService:
             setattr(assignment, key, val)
 
         await self.session.flush()
+        logger.info(
+            "Изменено назначение id={} (поля: {})",
+            assignment.id,
+            ", ".join(update_dict.keys()) or "нет",
+        )
         return (await self.assignment_repo.get_detailed(assignment.id)) or assignment
 
     async def delete_assignment(self, doctor: User, assignment_id: int) -> None:
@@ -136,6 +151,7 @@ class AssignmentService:
         if assignment.status == AssignmentStatus.COMPLETED:
             raise BusinessRuleError("Нельзя удалить выполненное назначение. Измените статус")
         await self.assignment_repo.delete(assignment)
+        logger.info("Удалено назначение id={} врачом={}", assignment_id, doctor.id)
 
     async def record_execution(
         self,
@@ -161,9 +177,7 @@ class AssignmentService:
         is_overseer = performer.has_any_role(RoleEnum.HEAD_DOCTOR, RoleEnum.SUPER_ADMIN)
 
         if not (is_nurse or is_doctor or is_overseer):
-            raise PermissionDeniedError(
-                "Отметку о выполнении вносит медсестра или врач"
-            )
+            raise PermissionDeniedError("Отметку о выполнении вносит медсестра или врач")
 
         assignment = await self.assignment_repo.get_by_id(data.assignment_id)
         if not assignment:
@@ -215,6 +229,12 @@ class AssignmentService:
         assignment.status = AssignmentStatus.IN_PROGRESS
         await self.session.flush()
 
+        logger.info(
+            "Отмечено выполнение процедуры: назначение={} выполнил={} статус={}",
+            data.assignment_id,
+            performer.id,
+            data.status.value,
+        )
         return saved
 
     async def _get_paid_invoice_for_assignment(self, assignment_id: int) -> Invoice | None:
@@ -242,4 +262,12 @@ class AssignmentService:
             file_path=file_path,
             performed_at=data.performed_at,
         )
-        return await self.assignment_repo.add_analysis(analysis)
+        saved = await self.assignment_repo.add_analysis(analysis)
+        logger.info(
+            "Загружен результат анализа: id={} пациент={} назначение={} файл={}",
+            saved.id,
+            patient_id,
+            data.assignment_id,
+            "есть" if file_path else "нет",
+        )
+        return saved

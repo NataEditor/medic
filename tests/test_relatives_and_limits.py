@@ -108,9 +108,7 @@ class TestPatientRelatives(unittest.IsolatedAsyncioTestCase):
         from sqlalchemy.orm import selectinload
 
         stmt = (
-            select(User)
-            .options(selectinload(User.patient_profile))
-            .where(User.id == self.user_id)
+            select(User).options(selectinload(User.patient_profile)).where(User.id == self.user_id)
         )
         return (await session.execute(stmt)).scalar_one()
 
@@ -219,9 +217,7 @@ class TestPatientRelatives(unittest.IsolatedAsyncioTestCase):
 
             # Пациент не может подтвердить сам
             with self.assertRaises(PermissionDeniedError):
-                await service.confirm_relative(
-                    user, link.id, PatientRelativeConfirm(approve=True)
-                )
+                await service.confirm_relative(user, link.id, PatientRelativeConfirm(approve=True))
 
 
 class TestPatientCancelLimit(unittest.IsolatedAsyncioTestCase):

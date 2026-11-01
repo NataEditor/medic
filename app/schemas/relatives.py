@@ -27,9 +27,7 @@ class PatientRelativeConfirm(ORMModel):
     """Подтверждение или отклонение связи ресепшеном."""
 
     approve: bool = Field(..., description="True — подтвердить, False — отклонить")
-    notes: str | None = Field(
-        None, max_length=500, description="Какой документ предъявлен"
-    )
+    notes: str | None = Field(None, max_length=500, description="Какой документ предъявлен")
 
 
 class PatientRelativeResponse(ORMModel):

@@ -40,9 +40,7 @@ class AppointmentRepository(BaseRepository[Appointment]):
         if bind is not None and bind.dialect.name != "postgresql":
             return
 
-        stmt = (
-            select(User.id).where(User.id == doctor_id).with_for_update()
-        )
+        stmt = select(User.id).where(User.id == doctor_id).with_for_update()
         await self.session.execute(stmt)
 
     async def check_doctor_overlap(

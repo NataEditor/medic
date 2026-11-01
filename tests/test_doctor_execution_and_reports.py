@@ -338,9 +338,7 @@ class TestDoctorProductivityReport(unittest.IsolatedAsyncioTestCase):
             today = date.today()
 
             # Свои показатели — ок
-            report = await service.my_productivity(
-                doctor, today - timedelta(days=7), today
-            )
+            report = await service.my_productivity(doctor, today - timedelta(days=7), today)
             self.assertEqual(len(report.doctors), 1)
 
     async def test_doctor_cannot_see_other_doctor_report(self) -> None:
@@ -350,9 +348,7 @@ class TestDoctorProductivityReport(unittest.IsolatedAsyncioTestCase):
             today = date.today()
 
             with self.assertRaises(PermissionDeniedError):
-                await service.doctor_productivity(
-                    doctor, 99999, today - timedelta(days=7), today
-                )
+                await service.doctor_productivity(doctor, 99999, today - timedelta(days=7), today)
 
 
 class TestAuditOfViews(unittest.IsolatedAsyncioTestCase):

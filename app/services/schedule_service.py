@@ -143,7 +143,7 @@ class ScheduleService:
                 appt.scheduled_at.replace(tzinfo=None) + timedelta(minutes=appt.duration_minutes),
             )
             for appt in appointments
-        ]        # 4. Свободные слоты: идём по смене с шагом slot_minutes
+        ]  # 4. Свободные слоты: идём по смене с шагом slot_minutes
         shift_start = datetime.combine(on_date, schedule.start_time)
         shift_end = datetime.combine(on_date, schedule.end_time)
         break_range: tuple[datetime, datetime] | None = None

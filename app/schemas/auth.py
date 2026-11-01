@@ -1,8 +1,10 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
+
+from app.schemas.types import Email
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: Email
     password: str = Field(..., min_length=6)
 
 

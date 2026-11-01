@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import PATIENT_CANCEL_LIMIT_HOURS
 from app.core.exceptions import BusinessRuleError, NotFoundError
+from app.core.logging import logger
 from app.models.entities import Appointment, Invoice, Service
 from app.models.enums import AppointmentStatus, PaymentStatus
 from app.repositories.appointment_repo import AppointmentRepository
@@ -23,7 +24,8 @@ class AppointmentService:
         self.billing_repo = BillingRepository(session)
         self.schedule_service = ScheduleService(session)
 
-    async def create_appointment(        self,
+    async def create_appointment(
+        self,
         data: AppointmentCreate,
         *,
         enforce_schedule: bool = True,
@@ -42,7 +44,8 @@ class AppointmentService:
 
         # Проверка занятости врача
         has_overlap = await self.appt_repo.check_doctor_overlap(
-            doctor_id=data.doctor_id,            start_time=data.scheduled_at,
+            doctor_id=data.doctor_id,
+            start_time=data.scheduled_at,
             duration_minutes=data.duration_minutes,
         )
         if has_overlap:
@@ -87,6 +90,14 @@ class AppointmentService:
                 await self.session.flush()
 
         detailed = await self.appt_repo.get_detailed(created.id)
+        logger.info(
+            "Создан приём id={}: пациент={} врач={} клиника={} время={}",
+            created.id,
+            created.patient_id,
+            created.doctor_id,
+            created.clinic_id,
+            created.scheduled_at,
+        )
         return detailed or created
 
     @staticmethod
@@ -140,6 +151,11 @@ class AppointmentService:
             setattr(appt, key, val)
 
         await self.session.flush()
+        logger.info(
+            "Перенесён приём id={} (поля: {})",
+            appt.id,
+            ", ".join(update_dict.keys()) or "нет",
+        )
         return (await self.appt_repo.get_detailed(appt.id)) or appt
 
     async def update_status(self, appt_id: int, data: AppointmentStatusUpdate) -> Appointment:
@@ -160,7 +176,14 @@ class AppointmentService:
             await self._cancel_invoice_for_cancelled_appointment(appt)
 
         await self.session.flush()
+        logger.info(
+            "Изменён статус приёма id={}: {} (причина: {})",
+            appt.id,
+            data.status.value,
+            data.cancel_reason or "-",
+        )
         return (await self.appt_repo.get_detailed(appt.id)) or appt
+
     async def _cancel_invoice_for_cancelled_appointment(self, appt: Appointment) -> None:
         """Аннулирует счёт при отмене приёма, если по нему ещё нет оплат.
 

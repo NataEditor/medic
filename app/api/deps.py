@@ -7,104 +7,61 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+# ═══════════════════════════════════════════════════════════════════
+# МАТРИЦА ПРАВ И ПРОВЕРКИ ДОСТУПА
+# ═══════════════════════════════════════════════════════════════════
+# Вся логика разграничения доступа вынесена в app.core.access.
+# Здесь — ре-экспорт для обратной совместимости: роутеры и сервисы
+# продолжают импортировать константы и guard-функции из app.api.deps.
+from app.core.access import (
+    ADMIN_ROLES,
+    AUDIT_VIEW_ROLES,
+    CASHIER_ROLES,
+    EMR_READ_ROLES,
+    EMR_WRITE_ROLES,
+    FINANCE_ROLES,
+    MEDICAL_STAFF_ROLES,
+    NETWORK_FINANCE_ROLES,
+    NETWORK_MEDICAL_ROLES,
+    PASSPORT_SCAN_ROLES,
+    PASSPORT_SCAN_VIEW_ROLES,
+    PATIENT_CREATE_ROLES,
+    PATIENT_REGISTRY_ROLES,
+    PATIENT_UPDATE_ROLES,
+    PORTAL_ACCESS_ROLES,
+    REFUND_APPROVE_ROLES,
+    SCHEDULE_MANAGE_ROLES,
+    SLOT_VIEW_ROLES,
+    STAFF_MANAGE_ROLES,
+    STAFF_VIEW_ROLES,
+    _has_any,
+    can_read_emk,
+    can_view_emr,
+    can_view_patient_card_and_procedures,
+    check_clinic_access,
+    ensure_analysis_access,
+    ensure_appointment_access,
+    ensure_clinic_scope,
+    ensure_doctor_clinic_access,
+    ensure_doctor_touch,
+    ensure_medical_access,
+    ensure_nurse_clinic_link,
+    ensure_patient_admin_access,
+    ensure_patient_card_access,
+    ensure_patient_self,
+    is_admin,
+    is_clinic_admin,
+    is_medical_staff,
+    is_super_admin,
+)
 from app.core.exceptions import AuthenticationError, PermissionDeniedError
-from app.core.logging import request_id_ctx
+from app.core.logging import bind_user_context, log_security_event, logger, request_id_ctx
 from app.core.security import decode_token
 from app.db.session import get_db
 from app.models.entities import AuditLog, User
 from app.models.enums import RoleEnum
 
-# ═══════════════════════════════════════════════════════════════════
-# МАТРИЦА ПРАВ (8 ролей, мультиролевая модель)
-# ═══════════════════════════════════════════════════════════════════
-
-# Администраторы платформы/клиники: управление людьми, графиками, доступами.
-# CLINIC_ADMIN — административный директор (НЕ читает ЭМК).
-# HEAD_DOCTOR — главный врач (медицинское качество, НЕ управляет людьми).
-ADMIN_ROLES: frozenset[RoleEnum] = frozenset(
-    {RoleEnum.SUPER_ADMIN, RoleEnum.CLINIC_ADMIN, RoleEnum.HEAD_DOCTOR}
-)
-
-# Медперсонал: доступ к медданным (ЭМК, назначения, анализы).
-# Врач — только «по касанию» (пациенты своих приёмов), см. ensure_medical_access.
-MEDICAL_STAFF_ROLES: frozenset[RoleEnum] = frozenset(
-    {RoleEnum.DOCTOR, RoleEnum.NURSE, RoleEnum.HEAD_DOCTOR, RoleEnum.SUPER_ADMIN}
-)
-
-# Роли, которые могут создавать карту пациента (регистратура и выше).
-# Врач карту НЕ создаёт — только читает и ведёт приём.
-PATIENT_CREATE_ROLES: frozenset[RoleEnum] = frozenset(
-    {
-        RoleEnum.RECEPTIONIST,
-        RoleEnum.CLINIC_ADMIN,
-        RoleEnum.HEAD_DOCTOR,
-        RoleEnum.SUPER_ADMIN,
-    }
-)
-
-# Роли, работающие с базой пациентов (поиск, просмотр карточки).
-PATIENT_REGISTRY_ROLES: frozenset[RoleEnum] = MEDICAL_STAFF_ROLES | {
-    RoleEnum.RECEPTIONIST,
-    RoleEnum.CLINIC_ADMIN,
-}
-
-# Финансы: счета, оплаты, отчёты, зарплаты.
-# Бухгалтерия — единая на всю сеть и НЕ видит медданные и ПДн.
-FINANCE_ROLES: frozenset[RoleEnum] = frozenset(
-    {
-        RoleEnum.ACCOUNTANT,
-        RoleEnum.RECEPTIONIST,
-        RoleEnum.CLINIC_ADMIN,
-        RoleEnum.SUPER_ADMIN,
-        RoleEnum.HEAD_DOCTOR,
-    }
-)
-
-# Роли, которые могут принимать оплату в кассе.
-CASHIER_ROLES: frozenset[RoleEnum] = frozenset(
-    {RoleEnum.RECEPTIONIST, RoleEnum.ACCOUNTANT, RoleEnum.CLINIC_ADMIN, RoleEnum.SUPER_ADMIN}
-)
-
-# Роли, которые могут подтверждать возврат (двойной контроль: заявка ≠ подтверждение).
-REFUND_APPROVE_ROLES: frozenset[RoleEnum] = frozenset(
-    {RoleEnum.ACCOUNTANT, RoleEnum.SUPER_ADMIN}
-)
-
 bearer_scheme = HTTPBearer(auto_error=False)
-
-
-def _has_any(user: User, roles: frozenset[RoleEnum]) -> bool:
-    """Есть ли у пользователя хотя бы одна роль из набора (мультиролевость)."""
-    return any(role.value in user.roles for role in roles)
-
-
-def is_admin(user: User) -> bool:
-    """True для администраторов (супер-админ, админ клиники, главврач)."""
-    return _has_any(user, ADMIN_ROLES)
-
-
-def is_super_admin(user: User) -> bool:
-    """True, если пользователь — владелец платформы (супер-админ)."""
-    return user.has_role(RoleEnum.SUPER_ADMIN)
-
-
-def is_medical_staff(user: User) -> bool:
-    """True для медперсонала (врач, медсестра, главврач) — доступ к медданным."""
-    return _has_any(user, MEDICAL_STAFF_ROLES)
-
-
-def is_clinic_admin(user: User) -> bool:
-    """True для административного директора клиники (без доступа к ЭМК)."""
-    return user.has_role(RoleEnum.CLINIC_ADMIN)
-
-
-def can_read_emk(user: User) -> bool:
-    """Может ли пользователь читать ЭМК.
-
-    Админ клиники управляет людьми и расписанием, но НЕ читает медкарты —
-    разделение «деньги/люди» и «медицина».
-    """
-    return is_medical_staff(user)
 
 
 async def set_request_id(
@@ -121,6 +78,7 @@ async def get_current_user(
 ) -> User:
     """Извлекает и валидирует текущего пользователя из JWT Bearer токена."""
     if credentials is None:
+        log_security_event("auth_missing_token", "Запрос без Bearer токена")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Требуется Bearer токен аутентификации",
@@ -130,6 +88,7 @@ async def get_current_user(
     try:
         payload = decode_token(credentials.credentials, expected_type="access")
     except AuthenticationError as exc:
+        log_security_event("auth_invalid_token", exc.message)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=exc.message,
@@ -138,6 +97,7 @@ async def get_current_user(
 
     user_id = payload.get("sub")
     if not user_id:
+        log_security_event("auth_invalid_token", "Некорректный subject токена")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Некорректный subject токена",
@@ -156,16 +116,29 @@ async def get_current_user(
     user = result.scalar_one_or_none()
 
     if user is None:
+        log_security_event(
+            "auth_user_not_found",
+            "Пользователь из токена не найден",
+            user_id=user_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Пользователь не найден",
         )
     if not user.is_active:
+        log_security_event(
+            "auth_inactive_user",
+            "Попытка входа деактивированной учётной записи",
+            user_id=user.id,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Учётная запись деактивирована",
         )
 
+    # Привязываем пользователя к контексту логирования: все дальнейшие
+    # записи в рамках запроса будут содержать, кто выполнил действие.
+    bind_user_context(user.id)
     return user
 
 
@@ -204,13 +177,21 @@ def require_roles(*allowed_roles: RoleEnum) -> Callable[..., User]:
             return current_user
         if current_user.has_any_role(*allowed_roles):
             return current_user
+        required = ", ".join(r.value for r in allowed_roles)
+        log_security_event(
+            "access_denied",
+            "Недостаточно прав для операции",
+            user_id=current_user.id,
+            roles=current_user.roles,
+            required=required,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Доступ запрещён. Требуется одна из ролей: "
-            f"{', '.join(r.value for r in allowed_roles)}",
+            detail=f"Доступ запрещён. Требуется одна из ролей: {required}",
         )
 
     return role_checker
+
 
 def require_super_admin() -> Callable[..., User]:
     """Ограничивает доступ строго владельцем платформы (SUPER_ADMIN).
@@ -229,18 +210,6 @@ def require_super_admin() -> Callable[..., User]:
     return super_admin_checker
 
 
-async def check_clinic_access(
-    current_user: User,
-    target_clinic_id: int | None,
-) -> None:
-    """Администраторы (супер-админ, главврач) видят любую клинику сети.
-    Остальные сотрудники ограничены своей клиникой."""
-    if is_admin(current_user):
-        return
-    if current_user.clinic_id is None or current_user.clinic_id != target_clinic_id:
-        raise PermissionDeniedError("Нет доступа к данным другой клиники")
-
-
 async def record_audit_log(
     db: AsyncSession,
     user: User | None,
@@ -250,7 +219,11 @@ async def record_audit_log(
     changes: str | None = None,
     ip_address: str | None = None,
 ) -> None:
-    """Запись действия в аудит-лог (врачебная тайна, безопасность данных)."""
+    """Запись действия в аудит-лог (врачебная тайна, безопасность данных).
+
+    Для просмотров ПДн (152-ФЗ) используйте action=ACTION_VIEW_PDN —
+    такие записи попадают в фильтр only_pdn журнала аудита.
+    """
     log_entry = AuditLog(
         user_id=user.id if user else None,
         action=action,
@@ -260,6 +233,49 @@ async def record_audit_log(
         ip_address=ip_address,
     )
     db.add(log_entry)
+    logger.debug(
+        "Аудит: действие={} объект={}#{} пользователь={}",
+        action,
+        entity_name,
+        entity_id,
+        user.id if user else "-",
+    )
+
+
+async def record_pdn_view(
+    db: AsyncSession,
+    user: User | None,
+    entity_name: str,
+    entity_id: int | None,
+    *,
+    resource: str,
+    ip_address: str | None = None,
+) -> None:
+    """Фиксация просмотра персональных данных (152-ФЗ).
+
+    Единая точка для всех чтений ПДн: ЭМК, скан паспорта, карточка
+    пациента. Пишет action=VIEW_PDN, а конкретный ресурс — в changes,
+    чтобы журнал можно было фильтровать и по типу, и по объекту.
+    """
+    from app.core.constants import ACTION_VIEW_PDN
+
+    await record_audit_log(
+        db=db,
+        user=user,
+        action=ACTION_VIEW_PDN,
+        entity_name=entity_name,
+        entity_id=entity_id,
+        changes=f'{{"resource": "{resource}"}}',
+        ip_address=ip_address,
+    )
+    # Просмотр ПДн — событие безопасности (152-ФЗ): пишем в отдельный журнал.
+    log_security_event(
+        "view_pdn",
+        "Просмотр персональных данных",
+        user_id=user.id if user else "-",
+        resource=resource,
+        entity=f"{entity_name}#{entity_id}",
+    )
 
 
 def require_medical_staff() -> Callable[..., User]:
@@ -309,91 +325,62 @@ def require_patient_creator() -> Callable[..., User]:
         current_user: Annotated[User, Depends(get_current_user)],
     ) -> User:
         if not _has_any(current_user, PATIENT_CREATE_ROLES):
-            raise PermissionDeniedError(
-                "Создавать карту пациента может только регистратура"
-            )
+            raise PermissionDeniedError("Создавать карту пациента может только регистратура")
         return current_user
 
     return creator_checker
 
-async def ensure_appointment_access(
-    current_user: User,
-    appointment_doctor_id: int,
-    appointment_patient_id: int,
-) -> None:
-    """Проверяет право на изменение/просмотр приёма (мультиролевая модель).
 
-    Правила:
-    - супер-админ, админ клиники, главврач, ресепшен — любой приём;
-    - врач — только свои приёмы (где он лечащий врач);
-    - медсестра — приёмы клиники (нужны для отметки «пациент прибыл»);
-    - пациент — только свой приём.
-    """
-    if current_user.has_any_role(
-        RoleEnum.SUPER_ADMIN,
-        RoleEnum.CLINIC_ADMIN,
-        RoleEnum.HEAD_DOCTOR,
-        RoleEnum.RECEPTIONIST,
-    ):
-        return
-
-    if current_user.has_role(RoleEnum.DOCTOR):
-        if appointment_doctor_id != current_user.id:
-            raise PermissionDeniedError("Врач может изменять только свои приёмы")
-        return
-
-    if current_user.has_role(RoleEnum.NURSE):
-        # Медсестра ведёт поток пациентов клиники
-        return
-
-    if current_user.has_role(RoleEnum.PATIENT):
-        if (
-            not current_user.patient_profile
-            or appointment_patient_id != current_user.patient_profile.id
-        ):
-            raise PermissionDeniedError("Пациент может видеть только свои приёмы")
-        return
-
-    raise PermissionDeniedError("Недостаточно прав для работы с приёмом")
-
-
-async def ensure_medical_access(
-    db: AsyncSession,
-    current_user: User,
-    patient_id: int,
-) -> None:
-    """Правило «по касанию»: доступ врача к медкарте пациента.
-
-    Карта общая для сети, но врач не «гуляет» по реестру:
-    - супер-админ, главврач — доступ к любой карте сети;
-    - медсестра — доступ в рамках своей клиники;
-    - врач — только если с пациентом есть связь: назначенный приём
-      (текущий или будущий) либо приём в прошлом;
-    - админ клиники, бухгалтерия — доступа к ЭМК нет.
-    """
-    from app.models.entities import Appointment
-
-    if current_user.has_any_role(RoleEnum.SUPER_ADMIN, RoleEnum.HEAD_DOCTOR):
-        return
-
-    if current_user.has_role(RoleEnum.NURSE):
-        # Медсестра работает с пациентами своей клиники
-        return
-
-    if current_user.has_role(RoleEnum.DOCTOR):
-        stmt = (
-            select(Appointment.id)
-            .where(
-                Appointment.doctor_id == current_user.id,
-                Appointment.patient_id == patient_id,
-            )
-            .limit(1)
-        )
-        has_link = (await db.execute(stmt)).scalar_one_or_none() is not None
-        if not has_link:
-            raise PermissionDeniedError(
-                "Нет доступа к карте: у вас нет приёмов с этим пациентом"
-            )
-        return
-
-    raise PermissionDeniedError("Доступ к медицинской карте запрещён")
+# Ре-экспорт матрицы прав и guard-функций из app.core.access.
+# Роутеры и сервисы импортируют их из app.api.deps (обратная совместимость).
+__all__ = [
+    "ADMIN_ROLES",
+    "AUDIT_VIEW_ROLES",
+    "CASHIER_ROLES",
+    "EMR_READ_ROLES",
+    "EMR_WRITE_ROLES",
+    "FINANCE_ROLES",
+    "MEDICAL_STAFF_ROLES",
+    "NETWORK_FINANCE_ROLES",
+    "NETWORK_MEDICAL_ROLES",
+    "PASSPORT_SCAN_ROLES",
+    "PASSPORT_SCAN_VIEW_ROLES",
+    "PATIENT_CREATE_ROLES",
+    "PATIENT_REGISTRY_ROLES",
+    "PATIENT_UPDATE_ROLES",
+    "PORTAL_ACCESS_ROLES",
+    "REFUND_APPROVE_ROLES",
+    "SCHEDULE_MANAGE_ROLES",
+    "SLOT_VIEW_ROLES",
+    "STAFF_MANAGE_ROLES",
+    "STAFF_VIEW_ROLES",
+    "bearer_scheme",
+    "can_read_emk",
+    "can_view_emr",
+    "can_view_patient_card_and_procedures",
+    "check_clinic_access",
+    "ensure_analysis_access",
+    "ensure_appointment_access",
+    "ensure_clinic_scope",
+    "ensure_doctor_clinic_access",
+    "ensure_doctor_touch",
+    "ensure_medical_access",
+    "ensure_nurse_clinic_link",
+    "ensure_patient_admin_access",
+    "ensure_patient_card_access",
+    "ensure_patient_self",
+    "get_current_patient_user",
+    "get_current_user",
+    "is_admin",
+    "is_clinic_admin",
+    "is_medical_staff",
+    "is_super_admin",
+    "record_audit_log",
+    "record_pdn_view",
+    "require_finance",
+    "require_medical_staff",
+    "require_patient_creator",
+    "require_roles",
+    "require_super_admin",
+    "set_request_id",
+]
