@@ -225,3 +225,19 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 # Применить все миграции (в Docker-сети хост = postgres, локально = localhost)
 alembic upgrade head
 ```
+
+### E2E-тесты на PostgreSQL
+
+Основной набор тестов идёт на SQLite in-memory (быстро). Для проверки на
+реальном PostgreSQL есть отдельный набор `tests/test_postgres_e2e.py` —
+он запускается только при заданном `TEST_DATABASE_URL`:
+
+```bash
+# Создать тестовую БД
+docker exec medic-postgres psql -U medic -d medic -c "CREATE DATABASE medic_test;"
+
+# Прогнать e2e (схема создаётся и удаляется автоматически)
+TEST_DATABASE_URL="postgresql+asyncpg://medic:medic@localhost:5432/medic_test" \
+    python -m unittest tests.test_postgres_e2e
+```
+```
